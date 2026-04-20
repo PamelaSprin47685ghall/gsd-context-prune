@@ -1,0 +1,34 @@
+{
+  "name": "pi-context-prune",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pi extension package for pruning future context while preserving original tool-call history.",
+  "type": "module",
+  "scripts": {
+    "build": "echo 'nothing to build'",
+    "check": "echo 'nothing to check'"
+  },
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/championswimmer/pi-context-prune.git"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/championswimmer/pi-context-prune/issues"
+  },
+  "homepage": "https://github.com/championswimmer/pi-context-prune#readme",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*",
+    "@sinclair/typebox": "*"
+  }
+}
