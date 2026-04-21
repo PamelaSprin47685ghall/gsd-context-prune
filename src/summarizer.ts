@@ -24,7 +24,7 @@ export function resolveModel(config: ContextPruneConfig, ctx: ExtensionContext):
   const slashIndex = config.summarizerModel.indexOf("/");
   if (slashIndex === -1) {
     ctx.ui.notify(
-      `context-prune: invalid summarizerModel "${config.summarizerModel}", expected "provider/model-id". Falling back to default model.`,
+      `pruner: invalid summarizerModel "${config.summarizerModel}", expected "provider/model-id". Falling back to default model.`,
       "warning"
     );
     return ctx.model;
@@ -36,7 +36,7 @@ export function resolveModel(config: ContextPruneConfig, ctx: ExtensionContext):
   const found = ctx.modelRegistry.find(provider, modelId);
   if (!found) {
     ctx.ui.notify(
-      `context-prune: model "${config.summarizerModel}" not found in registry. Falling back to default model.`,
+      `pruner: model "${config.summarizerModel}" not found in registry. Falling back to default model.`,
       "warning"
     );
     return ctx.model;
@@ -59,7 +59,7 @@ export async function summarizeBatch(
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) {
-      ctx.ui.notify(`context-prune: summarization failed: ${auth.error}`, "error");
+      ctx.ui.notify(`pruner: summarization failed: ${auth.error}`, "error");
       return null;
     }
 
@@ -95,7 +95,7 @@ export async function summarizeBatch(
     return llmText + footer;
   } catch (err: any) {
     ctx.ui.notify(
-      `context-prune: summarization failed: ${err.message}`,
+      `pruner: summarization failed: ${err.message}`,
       "error"
     );
     return null;

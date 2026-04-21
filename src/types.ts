@@ -55,7 +55,22 @@ export const STATUS_WIDGET_ID = "context-prune";
 
 // ── Config ─────────────────────────────────────────────────────────────────
 
-/** Extension config stored in .pi/settings.json under the "contextPrune" key */
+/**
+ * When summarization (and context pruning) is triggered.
+ * - "every-turn"     : after every assistant turn that calls tools (default)
+ * - "on-context-tag" : batches up turns and flushes when the model calls context_tag
+ * - "on-demand"      : only when the user runs /pruner now
+ */
+export type PruneOn = "every-turn" | "on-context-tag" | "on-demand";
+
+/** Choices for the prune-on setting (used by commands and settings overlay) */
+export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
+  { value: "every-turn", label: "Every turn" },
+  { value: "on-context-tag", label: "On context tag" },
+  { value: "on-demand", label: "On demand" },
+];
+
+/** Extension config stored in ~/.pi/agent/context-prune/settings.json */
 export interface ContextPruneConfig {
   /** Whether to prune raw tool outputs from future LLM context */
   enabled: boolean;
@@ -65,11 +80,14 @@ export interface ContextPruneConfig {
    * "provider/model-id" = explicit model (e.g. "anthropic/claude-haiku-3-5")
    */
   summarizerModel: string;
+  /** When to trigger summarization and pruning */
+  pruneOn: PruneOn;
 }
 
 export const DEFAULT_CONFIG: ContextPruneConfig = {
   enabled: false,
   summarizerModel: "default",
+  pruneOn: "every-turn",
 };
 
 // ── Captured batch ─────────────────────────────────────────────────────────

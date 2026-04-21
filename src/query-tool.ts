@@ -8,10 +8,10 @@ export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): v
     name: "context_tree_query",
     label: "Query Original Tool History",
     description:
-      "Retrieve original tool call results that have been pruned from active context. Pass toolCallIds from a context-prune-summary message to get back the full original outputs.",
+      "Retrieve original tool call results that have been pruned from active context. Pass toolCallIds from a pruner-summary message to get back the full original outputs.",
     promptSnippet: "Retrieve original pruned tool outputs by toolCallId",
     promptGuidelines: [
-      "When you need the full output of a tool call that was summarized and pruned from context, use context_tree_query with the toolCallIds listed in the relevant context-prune-summary message.",
+      "When you need the full output of a tool call that was summarized and pruned from context, use context_tree_query with the toolCallIds listed in the relevant pruner-summary message.",
     ],
     parameters: Type.Object({
       toolCallIds: Type.Array(Type.String({ description: "One or more tool call IDs to retrieve" }), {

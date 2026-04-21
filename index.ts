@@ -2,13 +2,13 @@
  * context-prune — Pi extension entry point
  *
  * Wires together all modules:
- *   config       — load/save .pi/settings.json contextPrune block
+ *   config       — load/save ~/.pi/agent/context-prune/settings.json
  *   batch-capture — serialize turn_end event into CapturedBatch
  *   summarizer   — call LLM to summarize a CapturedBatch
  *   indexer      — maintain Map<toolCallId, ToolCallRecord> + session persistence
  *   pruner       — filter context event messages
  *   query-tool   — register context_tree_query tool
- *   commands     — register /context-prune command + message renderer
+ *   commands     — register /pruner command + message renderer
  *
  * Usage:  pi -e .
  */
@@ -21,31 +21,73 @@ import { ToolCallIndexer } from "./src/indexer.js";
 import { pruneMessages } from "./src/pruner.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands } from "./src/commands.js";
-import type { ContextPruneConfig } from "./src/types.js";
+import type { ContextPruneConfig, CapturedBatch } from "./src/types.js";
 import { STATUS_WIDGET_ID } from "./src/types.js";
 
 export default function (pi: ExtensionAPI) {
-  // Shared mutable config reference — updated by /context-prune commands
+  // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
-    value: { enabled: false, summarizerModel: "default" },
+    value: { enabled: false, summarizerModel: "default", pruneOn: "every-turn" },
   };
 
   // Shared indexer — rebuilt from session on every session_start / session_tree
   const indexer = new ToolCallIndexer();
 
+  // Pending batches — accumulated until the prune trigger fires
+  const pendingBatches: CapturedBatch[] = [];
+
+  // Summarizes + indexes all pending batches and injects steer messages.
+  // Called immediately in "every-turn" mode, deferred otherwise.
+  const flushPending = async (ctx: any) => {
+    if (pendingBatches.length === 0) return;
+    const batches = pendingBatches.splice(0); // drain atomically
+
+    ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: summarizing…");
+
+    for (const batch of batches) {
+      const summaryText = await summarizeBatch(batch, currentConfig.value, ctx);
+      if (!summaryText) continue; // failure already notified by summarizeBatch
+
+      indexer.addBatch(batch, pi);
+
+      pi.sendMessage(
+        {
+          customType: "context-prune-summary",
+          content: summaryText,
+          display: true,
+          details: {
+            toolCallIds: batch.toolCalls.map((tc) => tc.toolCallId),
+            toolNames: batch.toolCalls.map((tc) => tc.toolName),
+            turnIndex: batch.turnIndex,
+            timestamp: batch.timestamp,
+          },
+        },
+        { deliverAs: "steer" }
+      );
+    }
+
+    ctx.ui.setStatus(
+      STATUS_WIDGET_ID,
+      currentConfig.value.enabled ? "prune: ON" : "prune: OFF"
+    );
+  };
+
   // ── session_start: restore config + index ─────────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
-    // Load config from .pi/settings.json
-    currentConfig.value = await loadConfig(ctx.cwd);
+    // Load config from ~/.pi/agent/context-prune/settings.json
+    currentConfig.value = await loadConfig();
 
     // Rebuild in-memory index from persisted session entries
     indexer.reconstructFromSession(ctx);
+
+    // Clear any batches queued before the session reload
+    pendingBatches.length = 0;
 
     // Update footer status
     ctx.ui.setStatus(STATUS_WIDGET_ID, currentConfig.value.enabled ? "prune: ON" : "prune: OFF");
 
     ctx.ui.notify(
-      `context-prune loaded — pruning ${currentConfig.value.enabled ? "ON" : "OFF"} | model: ${currentConfig.value.summarizerModel}`,
+      `pruner loaded — pruning ${currentConfig.value.enabled ? "ON" : "OFF"} | model: ${currentConfig.value.summarizerModel}`,
       "info"
     );
   });
@@ -53,56 +95,48 @@ export default function (pi: ExtensionAPI) {
   // Rebuild index after tree navigation too (branch may have different history)
   pi.on("session_tree", async (_event, ctx) => {
     indexer.reconstructFromSession(ctx);
+    // Pending batches belong to the old branch — discard them
+    pendingBatches.length = 0;
   });
 
-  // ── turn_end: detect tool-calling turns, summarize, inject ────────────────
+  // ── turn_end: capture batch, flush immediately or queue ──────────────────
   pi.on("turn_end", async (event, ctx) => {
-    // Only process turns that actually called tools
     if (!event.toolResults || event.toolResults.length === 0) return;
-
-    // Only run when pruning is enabled (v1 policy: summarize iff enabled)
     if (!currentConfig.value.enabled) return;
 
-    // Capture the batch from this turn
     const batch = captureBatch(
       event.message,
       event.toolResults,
       event.turnIndex,
       Date.now()
     );
-
     if (batch.toolCalls.length === 0) return;
 
-    // Notify user that summarization is in progress
-    ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: summarizing…");
+    pendingBatches.push(batch);
 
-    // Call the summarizer LLM
-    const summaryText = await summarizeBatch(batch, currentConfig.value, ctx);
+    if (currentConfig.value.pruneOn === "every-turn") {
+      await flushPending(ctx);
+    } else {
+      // Let the user know a batch is queued
+      const n = pendingBatches.length;
+      const trigger =
+        currentConfig.value.pruneOn === "on-context-tag"
+          ? "next context_tag"
+          : "/pruner now";
+      ctx.ui.setStatus(STATUS_WIDGET_ID, `prune: ${n} pending`);
+      ctx.ui.notify(
+        `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
+        "info"
+      );
+    }
+  });
 
-    // Restore status
-    ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: ON");
-
-    if (!summaryText) return; // summarization failed; errors already notified
-
-    // Persist the full tool outputs to the index (for context_tree_query recovery)
-    indexer.addBatch(batch, pi);
-
-    // Inject summary as a custom message with steer delivery
-    // so it lands in context before the next LLM call
-    pi.sendMessage(
-      {
-        customType: "context-prune-summary",
-        content: summaryText,
-        display: true,
-        details: {
-          toolCallIds: batch.toolCalls.map((tc) => tc.toolCallId),
-          toolNames: batch.toolCalls.map((tc) => tc.toolName),
-          turnIndex: batch.turnIndex,
-          timestamp: batch.timestamp,
-        },
-      },
-      { deliverAs: "steer" }
-    );
+  // ── tool_execution_end: flush when context_tag fires ─────────────────────
+  pi.on("tool_execution_end", async (event, ctx) => {
+    if (event.toolName !== "context_tag") return;
+    if (!currentConfig.value.enabled) return;
+    if (currentConfig.value.pruneOn !== "on-context-tag") return;
+    await flushPending(ctx);
   });
 
   // ── context: prune summarized tool results from next LLM call ─────────────
@@ -120,6 +154,6 @@ export default function (pi: ExtensionAPI) {
   // ── Register context_tree_query tool ──────────────────────────────────────
   registerQueryTool(pi, indexer);
 
-  // ── Register /context-prune command + summary message renderer ────────────
-  registerCommands(pi, currentConfig);
+  // ── Register /pruner command + summary message renderer ────────────
+  registerCommands(pi, currentConfig, flushPending);
 }
