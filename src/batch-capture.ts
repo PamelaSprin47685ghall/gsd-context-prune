@@ -50,7 +50,7 @@ export function captureBatch(
   return { turnIndex, timestamp, assistantText, toolCalls };
 }
 
-/** Serializes a CapturedBatch into readable text for the summarizer LLM. */
+/** Serializes a single CapturedBatch into readable text for the summarizer LLM. */
 export function serializeBatchForSummarizer(batch: CapturedBatch): string {
   const parts: string[] = [];
 
@@ -75,4 +75,18 @@ export function serializeBatchForSummarizer(batch: CapturedBatch): string {
   parts.push(toolParts.join("\n---\n"));
 
   return parts.join("\n");
+}
+
+/**
+ * Serializes multiple CapturedBatches into a single readable text block for the summarizer LLM.
+ * Each batch is rendered as a separate "Turn" section with a header indicating the turn index.
+ */
+export function serializeBatchesForSummarizer(batches: CapturedBatch[]): string {
+  return batches
+    .map((batch, i) => {
+      const header = `=== Turn ${batch.turnIndex}${i > 0 ? ` (batch ${i + 1})` : ""} ===`;
+      const body = serializeBatchForSummarizer(batch);
+      return `${header}\n${body}`;
+    })
+    .join("\n\n");
 }

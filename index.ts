@@ -16,13 +16,14 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { loadConfig } from "./src/config.js";
 import { captureBatch } from "./src/batch-capture.js";
-import { summarizeBatch } from "./src/summarizer.js";
+import { summarizeBatches } from "./src/summarizer.js";
 import { ToolCallIndexer } from "./src/indexer.js";
 import { pruneMessages } from "./src/pruner.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands } from "./src/commands.js";
 import type { ContextPruneConfig, CapturedBatch } from "./src/types.js";
-import { STATUS_WIDGET_ID } from "./src/types.js";
+import { STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT } from "./src/types.js";
+import { registerContextPruneTool } from "./src/context-prune-tool.js";
 
 export default function (pi: ExtensionAPI) {
   // Shared mutable config reference — updated by /pruner commands
@@ -36,19 +37,25 @@ export default function (pi: ExtensionAPI) {
   // Pending batches — accumulated until the prune trigger fires
   const pendingBatches: CapturedBatch[] = [];
 
-  // Summarizes + indexes all pending batches and injects steer messages.
-  // Called immediately in "every-turn" mode, deferred otherwise.
+  // Summarizes + indexes all pending batches in a single LLM call and injects steer messages.
+  // Called immediately in "every-turn" and "agentic-auto" modes, deferred otherwise.
   const flushPending = async (ctx: any) => {
     if (pendingBatches.length === 0) return;
     const batches = pendingBatches.splice(0); // drain atomically
 
     ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: summarizing…");
 
-    for (const batch of batches) {
-      const summaryText = await summarizeBatch(batch, currentConfig.value, ctx);
-      if (!summaryText) continue; // failure already notified by summarizeBatch
+    // Batch all pending batches into a single LLM call
+    const summaryText = await summarizeBatches(batches, currentConfig.value, ctx);
 
-      indexer.addBatch(batch, pi);
+    if (summaryText) {
+      // Index ALL batches and send one combined summary message
+      for (const batch of batches) {
+        indexer.addBatch(batch, pi);
+      }
+
+      const allToolCallIds = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolCallId));
+      const allToolNames = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolName));
 
       pi.sendMessage(
         {
@@ -56,10 +63,10 @@ export default function (pi: ExtensionAPI) {
           content: summaryText,
           display: true,
           details: {
-            toolCallIds: batch.toolCalls.map((tc) => tc.toolCallId),
-            toolNames: batch.toolCalls.map((tc) => tc.toolName),
-            turnIndex: batch.turnIndex,
-            timestamp: batch.timestamp,
+            toolCallIds: allToolCallIds,
+            toolNames: allToolNames,
+            turnIndex: batches[0].turnIndex, // first turn of the batch
+            timestamp: batches[batches.length - 1].timestamp, // last timestamp
           },
         },
         { deliverAs: "steer" }
@@ -70,6 +77,23 @@ export default function (pi: ExtensionAPI) {
       STATUS_WIDGET_ID,
       currentConfig.value.enabled ? "prune: ON" : "prune: OFF"
     );
+  };
+
+  // ── Helper: toggle context_prune tool activation based on config ───────────
+  // Uses `pi` (ExtensionRuntime) because getActiveTools/setActiveTools are
+  // runtime methods, NOT part of ExtensionContext/ExtensionCommandContext.
+  const syncToolActivation = () => {
+    const shouldActivate = currentConfig.value.enabled && currentConfig.value.pruneOn === "agentic-auto";
+    const activeTools = pi.getActiveTools();
+    if (shouldActivate) {
+      if (!activeTools.includes(CONTEXT_PRUNE_TOOL_NAME)) {
+        pi.setActiveTools([...activeTools, CONTEXT_PRUNE_TOOL_NAME]);
+      }
+    } else {
+      if (activeTools.includes(CONTEXT_PRUNE_TOOL_NAME)) {
+        pi.setActiveTools(activeTools.filter((t: string) => t !== CONTEXT_PRUNE_TOOL_NAME));
+      }
+    }
   };
 
   // ── session_start: restore config + index ─────────────────────────────────
@@ -86,6 +110,9 @@ export default function (pi: ExtensionAPI) {
     // Update footer status
     ctx.ui.setStatus(STATUS_WIDGET_ID, currentConfig.value.enabled ? "prune: ON" : "prune: OFF");
 
+    // Toggle context_prune tool activation for agentic-auto mode
+    syncToolActivation();
+
     ctx.ui.notify(
       `pruner loaded — pruning ${currentConfig.value.enabled ? "ON" : "OFF"} | model: ${currentConfig.value.summarizerModel}`,
       "info"
@@ -101,8 +128,18 @@ export default function (pi: ExtensionAPI) {
 
   // ── turn_end: capture batch, flush immediately or queue ──────────────────
   pi.on("turn_end", async (event, ctx) => {
-    if (!event.toolResults || event.toolResults.length === 0) return;
     if (!currentConfig.value.enabled) return;
+
+    const hasToolResults = event.toolResults && event.toolResults.length > 0;
+
+    if (!hasToolResults) {
+      // Text-only turn: the agent sent a final message with no tool calls.
+      // In "agent-message" mode, this is the trigger to flush pending batches.
+      if (currentConfig.value.pruneOn === "agent-message") {
+        await flushPending(ctx);
+      }
+      return;
+    }
 
     const batch = captureBatch(
       event.message,
@@ -119,10 +156,21 @@ export default function (pi: ExtensionAPI) {
     } else {
       // Let the user know a batch is queued
       const n = pendingBatches.length;
-      const trigger =
-        currentConfig.value.pruneOn === "on-context-tag"
-          ? "next context_tag"
-          : "/pruner now";
+      let trigger: string;
+      switch (currentConfig.value.pruneOn) {
+        case "on-context-tag":
+          trigger = "next context_tag";
+          break;
+        case "agent-message":
+          trigger = "agent's next text response";
+          break;
+        case "agentic-auto":
+          trigger = "agent calling context_prune";
+          break;
+        default:
+          trigger = "/pruner now";
+          break;
+      }
       ctx.ui.setStatus(STATUS_WIDGET_ID, `prune: ${n} pending`);
       ctx.ui.notify(
         `pruner: ${n} turn${n === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
@@ -139,6 +187,16 @@ export default function (pi: ExtensionAPI) {
     await flushPending(ctx);
   });
 
+  // ── agent_end: safety net flush for agent-message and agentic-auto modes ──────
+  // If the agent loop ends before a trigger fires (e.g. aborted),
+  // flush any remaining pending batches so they aren't lost.
+  pi.on("agent_end", async (_event, ctx) => {
+    if (!currentConfig.value.enabled) return;
+    if (currentConfig.value.pruneOn !== "agent-message" && currentConfig.value.pruneOn !== "agentic-auto") return;
+    if (pendingBatches.length === 0) return;
+    await flushPending(ctx);
+  });
+
   // ── context: prune summarized tool results from next LLM call ─────────────
   pi.on("context", async (event, _ctx) => {
     if (!currentConfig.value.enabled) return undefined;
@@ -151,9 +209,22 @@ export default function (pi: ExtensionAPI) {
     return { messages: pruned };
   });
 
+  // ── before_agent_start: inject system prompt for agentic-auto mode ───────────
+  pi.on("before_agent_start", async (event, _ctx) => {
+    if (!currentConfig.value.enabled || currentConfig.value.pruneOn !== "agentic-auto") return undefined;
+    // Append agentic-auto instructions to the system prompt
+    const appended = AGENTIC_AUTO_SYSTEM_PROMPT;
+    const original = event.systemPrompt ?? "";
+    const newPrompt = original + "\n\n" + appended;
+    return { systemPrompt: newPrompt };
+  });
+
   // ── Register context_tree_query tool ──────────────────────────────────────
   registerQueryTool(pi, indexer);
 
+  // ── Register context_prune tool (always registered, activated only in agentic-auto mode) ──
+  registerContextPruneTool(pi, flushPending);
+
   // ── Register /pruner command + summary message renderer ────────────
-  registerCommands(pi, currentConfig, flushPending);
+  registerCommands(pi, currentConfig, flushPending, syncToolActivation);
 }

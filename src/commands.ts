@@ -69,6 +69,8 @@ Usage:
   /pruner prune-on every-turn              Summarize after every tool-calling turn (default)
   /pruner prune-on on-context-tag          Summarize when context_tag is called
   /pruner prune-on on-demand               Only summarize when /pruner now runs
+  /pruner prune-on agent-message           Summarize when the agent sends a final text response
+  /pruner prune-on agentic-auto            LLM decides when to prune via context_prune tool
   /pruner now                              Flush pending tool calls immediately
   /pruner help                             Show this help
 
@@ -80,6 +82,7 @@ export function registerCommands(
   pi: ExtensionAPI,
   currentConfig: { value: ContextPruneConfig },
   flushPending: (ctx: ExtensionCommandContext) => void,
+  syncToolActivation: () => void,
 ): void {
   // Register the /pruner command
   pi.registerCommand("pruner", {
@@ -173,6 +176,8 @@ export function registerCommands(
             currentConfig.value = newConfig;
             saveConfig(newConfig);
             ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(newConfig));
+            // Toggle context_prune tool activation when config changes
+            syncToolActivation();
           };
 
           const settingsList = new SettingsList(
@@ -213,6 +218,7 @@ export function registerCommands(
           saveConfig(currentConfig.value);
           ctx.ui.notify("Context pruning enabled.");
           ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value));
+          syncToolActivation();
           break;
         }
 
@@ -222,6 +228,7 @@ export function registerCommands(
           saveConfig(currentConfig.value);
           ctx.ui.notify("Context pruning disabled.");
           ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value));
+          syncToolActivation();
           break;
         }
 
@@ -263,6 +270,7 @@ export function registerCommands(
           }
           saveConfig(currentConfig.value);
           ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value));
+          syncToolActivation();
           break;
         }
 

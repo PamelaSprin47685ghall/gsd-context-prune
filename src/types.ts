@@ -53,6 +53,26 @@ export const CUSTOM_TYPE_INDEX = "context-prune-index";
 /** Footer status widget ID */
 export const STATUS_WIDGET_ID = "context-prune";
 
+/** Name of the context_prune tool (injected only when agentic-auto mode is active) */
+export const CONTEXT_PRUNE_TOOL_NAME = "context_prune";
+
+/** System prompt injected when agentic-auto mode is active */
+export const AGENTIC_AUTO_SYSTEM_PROMPT = `[Context Prune — Agentic Auto Mode]
+You have access to the context_prune tool. Use it to summarize and compact preceding tool-call results from context.
+
+When to use context_prune:
+- After completing a group of 8–10 related tool calls (e.g., a multi-step file edit, search, or analysis sequence).
+- When context is getting large and you want to keep it manageable for future reasoning.
+
+When NOT to use context_prune:
+- Do NOT call it after every 2–3 tool calls. Only use it after a meaningful batch of work is done.
+- Do NOT call it for trivial or single tool calls.
+
+What happens when you call context_prune:
+- All pending tool-call results are summarized into concise bullet points.
+- The original full outputs are removed from context but preserved in the session index.
+- You can retrieve the full original output at any time using the context_tree_query tool with the toolCallIds listed in the summary.`;
+
 // ── Config ─────────────────────────────────────────────────────────────────
 
 /**
@@ -60,14 +80,20 @@ export const STATUS_WIDGET_ID = "context-prune";
  * - "every-turn"     : after every assistant turn that calls tools (default)
  * - "on-context-tag" : batches up turns and flushes when the model calls context_tag
  * - "on-demand"      : only when the user runs /pruner now
+ * - "agent-message"  : batches up turns and flushes when the agent sends a final text response
+ *                       (a turn with no tool calls), or when the agent loop ends
+ * - "agentic-auto"   : the LLM agent decides when to prune by calling the context_prune tool;
+ *                       the tool is only active in this mode and guided by prompt instructions
  */
-export type PruneOn = "every-turn" | "on-context-tag" | "on-demand";
+export type PruneOn = "every-turn" | "on-context-tag" | "on-demand" | "agent-message" | "agentic-auto";
 
 /** Choices for the prune-on setting (used by commands and settings overlay) */
 export const PRUNE_ON_MODES: { value: PruneOn; label: string }[] = [
   { value: "every-turn", label: "Every turn" },
   { value: "on-context-tag", label: "On context tag" },
   { value: "on-demand", label: "On demand" },
+  { value: "agent-message", label: "On agent message" },
+  { value: "agentic-auto", label: "Agentic auto" },
 ];
 
 /** Extension config stored in ~/.pi/agent/context-prune/settings.json */
