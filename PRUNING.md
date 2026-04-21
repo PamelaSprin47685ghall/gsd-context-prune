@@ -9,14 +9,16 @@
 1. [What Does a Long Session Look Like?](#what-does-a-long-session-look-like)
 2. [What Pruning Does](#what-pruning-does)
 3. [Pruned Data Is Still Available](#pruned-data-is-still-available)
-4. [How Prefix Caching Works](#how-prefix-caching-works)
-5. [Why Frequent Pruning Busts Cache](#why-frequent-pruning-busts-cache)
-6. [The Sweet Spot: Batch and Prune](#the-sweet-spot-batch-and-prune)
-7. [Why Summarization Works: Research Evidence](#why-summarization-works-research-evidence)
+4. [What Actually Lives in the Pruner Index](#what-actually-lives-in-the-pruner-index)
+5. [How the Model Re-reads Raw Outputs](#how-the-model-re-reads-raw-outputs)
+6. [How Prefix Caching Works](#how-prefix-caching-works)
+7. [Why Frequent Pruning Busts Cache](#why-frequent-pruning-busts-cache)
+8. [The Sweet Spot: Batch and Prune](#the-sweet-spot-batch-and-prune)
+9. [Why Summarization Works: Research Evidence](#why-summarization-works-research-evidence)
    - [SUPO — Summarization augmented Policy Optimization](#supo--summarization-augmented-policy-optimization)
    - [ReSum — Recursive Summarization for Long-Horizon Agents](#resum--recursive-summarization-for-long-horizon-agents)
    - [ACON — Agent Context Optimization](#acon--agent-context-optimization)
-8. [Summary](#summary)
+10. [Summary](#summary)
 
 ---
 
@@ -163,16 +165,27 @@ graph TB
 
 **Key points:**
 
-- The `AssistantMessage` tool-call blocks are **kept** (they carry `toolCallId`s the model may reference)
+- The `AssistantMessage` tool-call blocks are **kept** (they carry `toolCallId`s the model may reference later)
 - Only `ToolResultMessage` entries are **removed** from future context
+- Every pruned tool call is also copied into the pruner's runtime/session index with its `toolCallId`, tool name, args, status, turn index, timestamp, and full `resultText`
 - A summary message is injected as a "steer" (guaranteed to land before the next LLM call)
-- The session file retains all original messages unchanged — pruning affects only what the *next* request sees
+- The session file retains the original history, and the pruner keeps an index of summarized tool outputs — pruning affects only what the *next* request sees in active context
 
 ---
 
 ## Pruned Data Is Still Available
 
-Pruning does **not** delete data. It moves it out of the hot path (LLM context) and into an indexed archive.
+Pruning does **not** delete data. It moves raw tool results out of the hot path (active LLM context) and into an indexed archive the model can query later.
+
+There are two separate things happening during pruning:
+
+1. **Context filtering:** future requests stop including the old `toolResult` messages.
+2. **Index preservation:** the extension stores each summarized tool call in the pruner index, keyed by `toolCallId`.
+
+That distinction is the core idea:
+
+- **Pruned from context** does **not** mean **lost**
+- It means **hidden from the default prompt**, but still **recoverable on demand**
 
 ### ASCII: How `context_tree_query` recovers pruned data
 
@@ -210,6 +223,107 @@ Pruning does **not** delete data. It moves it out of the hot path (LLM context) 
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+## What Actually Lives in the Pruner Index
+
+When a batch is summarized, the extension writes a record for each tool call into `ToolCallIndexer` and persists that record into the session as a custom index entry.
+
+Conceptually, each indexed record looks like this:
+
+```ts
+{
+  toolCallId: "tc-006",
+  toolName: "bash",
+  args: { command: "npm run build" },
+  resultText: "full original raw output...",
+  isError: false,
+  turnIndex: 5,
+  timestamp: "2026-04-21T12:34:56.000Z"
+}
+```
+
+This matters because the summary is **not** the only surviving representation of the old tool call.
+The model still has access to:
+
+- the original `toolCallId`
+- the tool name and arguments
+- whether the tool errored
+- which turn it came from
+- the full original raw result text
+
+So after pruning, the model is working with a **two-layer memory**:
+
+1. **Hot memory:** compact summary text kept directly in context
+2. **Cold memory:** full raw tool outputs stored in the pruner index and retrievable by ID
+
+### What is removed vs what is preserved
+
+| Part of old turn | After pruning | Why |
+|---|---|---|
+| Assistant tool-call block | **Kept in context** | Preserves the `toolCallId` anchors the model can reference |
+| Tool result message | **Removed from active context** | Saves tokens |
+| Summary message | **Added to context** | Gives the model a compact description of what happened |
+| Indexed tool-call record | **Stored in pruner index** | Lets the model re-open the original raw output later |
+
+## How the Model Re-reads Raw Outputs
+
+The intended recovery flow is:
+
+1. The model reads a summary message.
+2. The summary lists the `toolCallId`s that were summarized.
+3. The model decides the summary is not enough and wants exact raw output.
+4. The model calls `context_tree_query({ toolCallIds: [...] })`.
+5. The tool looks up those IDs in the pruner index.
+6. The tool returns the original stored output back into the current turn.
+7. The model can now inspect that raw result and continue reasoning.
+
+### ASCII: end-to-end "prune, then re-read" flow
+
+```text
+assistant turn with tools
+        │
+        ▼
+raw tool results exist in context
+        │
+        ▼
+batch gets summarized
+        │
+        ├─► summary message added to context
+        │      └─► includes summarized toolCallIds
+        │
+        ├─► tool results indexed by toolCallId
+        │      └─► full raw resultText stored in index/session
+        │
+        └─► old toolResult messages removed from future context
+
+later...
+        │
+        ▼
+model sees summary and decides: "I need the exact old output"
+        │
+        ▼
+context_tree_query({ toolCallIds: ["tc-006"] })
+        │
+        ▼
+query tool loads indexed record for tc-006
+        │
+        ▼
+original raw output is returned into the current turn
+        │
+        ▼
+model continues with exact old context back in view
+```
+
+### Why this is important
+
+This is what makes pruning safe for real agent work:
+
+- summaries keep the default context small
+- `toolCallId`s keep old work addressable
+- `context_tree_query` makes the archive readable again
+- the model can "page in" exact old context only when it actually needs it
+
+So the extension is **not asking the model to trust summaries forever**. It is asking the model to use summaries as the default view, while keeping a precise escape hatch back to the original raw data.
 
 ---
 
@@ -342,7 +456,7 @@ The insight is simple: **batch many tool turns, then prune once**. Everything be
 │  │  Turn 4: Edit file → 15 tokens    ═══════╬═╬═╬═╬════╬═════╗     │    │
 │  │  Turn 5: Build + read → 2,980 tokens    ═╬═╬═╬═╬════╬═════╬═╗   │    │
 │  │  Turn 6: Read + edit → 105 tokens   ═════╬═╬═╬═╬════╬═════╬═╬   │    │
-│  │                                       ▼ ▼ ▼ ▼   ▼     ▼   ▼ ▼   │    
+│  │                                       ▼ ▼ ▼ ▼   ▼     ▼   ▼ ▼   │    │
 │  │  All these tool results stay in context UNCHANGED               │    │
 │  │  → Prefix cache is STABLE → cache HITS on every turn            │    │
 │  └─────────────────────────────────────────────────────────────────┘    │
