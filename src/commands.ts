@@ -102,7 +102,7 @@ Usage:
   /pruner prune-on agent-message           Summarize after the agent's final text reply (default; safest for cache stability)
   /pruner prune-on agentic-auto            LLM decides when to prune via context_prune tool
   /pruner stats                            Show cumulative summarizer token/cost stats
-  /pruner tree                             Browse pruned tool calls in a foldable tree
+  /pruner tree                             Browse pruned tool calls in a foldable tree (Ctrl-O opens selected summary)
   /pruner now                              Flush pending tool calls immediately
   /pruner help                             Show this help
 

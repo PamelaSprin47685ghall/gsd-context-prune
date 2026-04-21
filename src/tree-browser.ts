@@ -1,5 +1,6 @@
 import type { Component } from "@mariozechner/pi-tui";
-import { getKeybindings, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { Markdown, getKeybindings, matchesKey, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
 import type { Theme } from "@mariozechner/pi-coding-agent";
 import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import type { ToolCallRecord } from "./types.js";
@@ -26,6 +27,12 @@ interface VisibleRow {
   index: number;
 }
 
+interface SummaryOverlayState {
+  title: string;
+  text: string;
+  scrollOffset: number;
+}
+
 // ── Formatting helpers ──────────────────────────────────────────────────────
 
 function formatChars(n: number): string {
@@ -38,6 +45,10 @@ function padToWidth(str: string, width: number): string {
   const vis = visibleWidth(str);
   if (vis >= width) return str;
   return str + " ".repeat(width - vis);
+}
+
+function isCtrlO(data: string): boolean {
+  return matchesKey(data, "ctrl+o") || data === "\u000f";
 }
 
 // ── Box drawing ─────────────────────────────────────────────────────────────
@@ -163,6 +174,7 @@ export class TreeBrowser implements Component {
   private selectedIndex = 0;
   private theme: Theme;
   private onDone: () => void;
+  private summaryOverlay: SummaryOverlayState | null = null;
 
   constructor(
     private readonly roots: TreeNode[],
@@ -198,6 +210,17 @@ export class TreeBrowser implements Component {
   handleInput(data: string): void {
     const kb = getKeybindings();
 
+    if (this.summaryOverlay) {
+      if (kb.matches(data, "tui.select.up")) {
+        this.summaryOverlay.scrollOffset = Math.max(0, this.summaryOverlay.scrollOffset - 1);
+      } else if (kb.matches(data, "tui.select.down")) {
+        this.summaryOverlay.scrollOffset += 1;
+      } else if (kb.matches(data, "tui.select.cancel") || data === "q" || isCtrlO(data)) {
+        this.summaryOverlay = null;
+      }
+      return;
+    }
+
     if (kb.matches(data, "tui.select.up")) {
       this.selectedIndex =
         this.selectedIndex === 0
@@ -214,6 +237,8 @@ export class TreeBrowser implements Component {
         row.node.expanded = !row.node.expanded;
         this.rebuildFlatRows();
       }
+    } else if (isCtrlO(data)) {
+      this.openSelectedSummary();
     } else if (kb.matches(data, "tui.select.cancel") || data === "q") {
       this.onDone();
     }
@@ -222,19 +247,92 @@ export class TreeBrowser implements Component {
   render(width: number): string[] {
     const innerWidth = Math.max(0, width - 2);
 
+    let baseLines: string[];
     if (this.flatRows.length === 0) {
       const msg = this.theme.fg("muted", "(no pruned tool calls in this session)");
-      return boxLines([msg], width, "Pruned Tool Calls", this.theme);
+      baseLines = boxLines([msg], width, "Pruned Tool Calls", this.theme);
+    } else {
+      const contentLines: string[] = [
+        this.theme.fg("dim", "Enter/Space expand • Ctrl-O open summary • Esc/q close"),
+        "",
+      ];
+      for (let i = 0; i < this.flatRows.length; i++) {
+        const row = this.flatRows[i];
+        const line = this.renderRow(row.node, innerWidth, i === this.selectedIndex);
+        contentLines.push(line);
+      }
+
+      baseLines = boxLines(contentLines, width, "Pruned Tool Calls", this.theme);
     }
 
-    const contentLines: string[] = [];
-    for (let i = 0; i < this.flatRows.length; i++) {
-      const row = this.flatRows[i];
-      const line = this.renderRow(row.node, innerWidth, i === this.selectedIndex);
-      contentLines.push(line);
+    if (!this.summaryOverlay) {
+      return baseLines;
     }
 
-    return boxLines(contentLines, width, "Pruned Tool Calls", this.theme);
+    return this.renderWithSummaryOverlay(baseLines, width);
+  }
+
+  private openSelectedSummary(): void {
+    const row = this.flatRows[this.selectedIndex];
+    if (!row || row.node.isLeaf || !row.node.detail) {
+      return;
+    }
+
+    this.summaryOverlay = {
+      title: row.node.label,
+      text: row.node.detail,
+      scrollOffset: 0,
+    };
+  }
+
+  private renderWithSummaryOverlay(baseLines: string[], width: number): string[] {
+    const overlay = this.summaryOverlay;
+    if (!overlay) return baseLines;
+
+    const overlayWidth = Math.max(60, width - 2);
+    const overlayInnerWidth = Math.max(1, overlayWidth - 2);
+    const markdown = new Markdown(overlay.text, 1, 0, getMarkdownTheme());
+    const markdownLines = markdown.render(Math.max(1, overlayInnerWidth));
+    const reservedLines = 5;
+    const maxContentHeight = Math.max(12, Math.min(markdownLines.length, baseLines.length + 8));
+    const maxScroll = Math.max(0, markdownLines.length - maxContentHeight);
+    overlay.scrollOffset = Math.min(overlay.scrollOffset, maxScroll);
+
+    const visibleContent = markdownLines.slice(
+      overlay.scrollOffset,
+      overlay.scrollOffset + maxContentHeight,
+    );
+
+    const footer = this.theme.fg(
+      "dim",
+      `↑/↓ scroll • Ctrl-O/Esc/q close${maxScroll > 0 ? ` • ${overlay.scrollOffset + 1}-${Math.min(overlay.scrollOffset + maxContentHeight, markdownLines.length)} / ${markdownLines.length}` : ""}`,
+    );
+    const overlayLines = boxLines(
+      [
+        this.theme.fg("accent", truncateToWidth(overlay.title, overlayInnerWidth, "…", false)),
+        this.theme.fg("dim", "Pruned summary message"),
+        "",
+        ...visibleContent,
+        "",
+        footer,
+      ],
+      overlayWidth,
+      "Pruned Summary",
+      this.theme,
+    );
+
+    const canvasHeight = Math.max(baseLines.length, overlayLines.length + 2);
+    const blankLine = " ".repeat(width);
+    const composed = Array.from({ length: canvasHeight }, (_, index) => baseLines[index] ?? blankLine);
+    const startRow = Math.max(0, Math.floor((canvasHeight - overlayLines.length) / 2));
+    const leftPad = Math.max(0, Math.floor((width - overlayWidth) / 2));
+    const rightPad = Math.max(0, width - leftPad - overlayWidth);
+
+    for (let i = 0; i < overlayLines.length && startRow + i < composed.length; i++) {
+      composed[startRow + i] = " ".repeat(leftPad) + overlayLines[i] + " ".repeat(rightPad);
+    }
+
+    return composed;
   }
 
   private renderRow(

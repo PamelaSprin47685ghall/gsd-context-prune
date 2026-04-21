@@ -105,7 +105,7 @@ The extension registers the `/pruner` command:
 | `/pruner prune-on` | Interactive picker over all trigger modes |
 | `/pruner prune-on <mode>` | Set trigger mode directly |
 | `/pruner stats` | Show cumulative summarizer token/cost stats |
-| `/pruner tree` | Browse pruned tool calls in a foldable tree browser |
+| `/pruner tree` | Browse pruned tool calls in a foldable tree browser; press `Ctrl-O` on a summary to open it in a bordered overlay |
 | `/pruner now` | Flush pending tool calls immediately (works in all modes) |
 | `/pruner help` | Show full help text |
 
@@ -249,7 +249,7 @@ The extension registers a status widget in the Pi footer that shows the current 
 - The `context_tree_query` tool is only active when the extension is loaded.
 - The `context_prune` tool is only activated in `agentic-auto` mode.
 - The summarizer call happens synchronously inside `turn_end`, adding latency between turns proportional to the summarizer model's response time.
-- The `/pruner tree` browser shows pruned tool calls grouped under their summaries, but does not yet support recovering full original outputs inline (use `context_tree_query` for that).
+- The `/pruner tree` browser shows pruned tool calls grouped under their summaries. Press `Ctrl-O` on a summary node to open the full pruned summary message in a bordered overlay. It still does not recover full original tool outputs inline (use `context_tree_query` for that).
 - Summary grouping across multiple turns (e.g., "compress the last 5 summaries") is a follow-up item.
 
 ## Follow-up ideas
