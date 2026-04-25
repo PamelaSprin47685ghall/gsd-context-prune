@@ -40,10 +40,11 @@ function logFlushDiagnostic(
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(" ");
 
-  ctx.ui.notify(
-    `[pruner] ${phase} ${cause} ${scenarioId}${suffix ? ` ${suffix}` : ""}`,
-    "info"
-  );
+  const message = `[pruner] plugin=${PLUGIN_NAME} phase=${phase} cause=${cause} scenarioId=${scenarioId}${suffix ? ` ${suffix}` : ""}`;
+  const notify = (ctx as { ui?: { notify?: unknown } } | undefined)?.ui?.notify;
+  if (typeof notify === "function") {
+    notify.call((ctx as { ui?: unknown })?.ui, message, "info");
+  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -83,7 +84,7 @@ export default function (pi: ExtensionAPI) {
   // Called immediately in "every-turn" and "agentic-auto" modes, deferred otherwise.
   const flushPending = async (ctx: any, scenarioId = "unspecified"): Promise<void> => {
     if (flushInFlight) {
-      logFlushDiagnostic("flush-await", "existing-flush-in-flight", scenarioId, {
+      logFlushDiagnostic(ctx, "flush-await", "existing-flush-in-flight", scenarioId, {
         pendingGeneration,
         queuedBatches: pendingBatches.length,
       });
@@ -91,7 +92,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (pendingBatches.length === 0) {
-      logFlushDiagnostic("flush-skip", "no-pending-batches", scenarioId, {
+      logFlushDiagnostic(ctx, "flush-skip", "no-pending-batches", scenarioId, {
         pendingGeneration,
       });
       return;
@@ -102,7 +103,7 @@ export default function (pi: ExtensionAPI) {
     const batchCount = batches.length;
     const toolCallCount = batches.reduce((total, batch) => total + batch.toolCalls.length, 0);
 
-    logFlushDiagnostic("flush-start", "pending-batches-drained", scenarioId, {
+    logFlushDiagnostic(ctx, "flush-start", "pending-batches-drained", scenarioId, {
       pendingGeneration: drainGeneration,
       batchCount,
       toolCallCount,
@@ -115,7 +116,7 @@ export default function (pi: ExtensionAPI) {
       const result = await summarizeBatches(batches, currentConfig.value, ctx);
 
       if (drainGeneration !== pendingGeneration) {
-        logFlushDiagnostic("flush-end", "discarded-stale-generation", scenarioId, {
+        logFlushDiagnostic(ctx, "flush-end", "discarded-stale-generation", scenarioId, {
           drainedGeneration: drainGeneration,
           currentGeneration: pendingGeneration,
           batchCount,
@@ -152,7 +153,7 @@ export default function (pi: ExtensionAPI) {
           { deliverAs: "steer" }
         );
 
-        logFlushDiagnostic("flush-end", "summary-indexed", scenarioId, {
+        logFlushDiagnostic(ctx, "flush-end", "summary-indexed", scenarioId, {
           pendingGeneration,
           batchCount,
           toolCallCount: allToolCallIds.length,
