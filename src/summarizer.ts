@@ -1,5 +1,5 @@
-import { complete } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import { complete } from "@gsd/pi-ai";
+import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import type { CapturedBatch, ContextPruneConfig, SummarizeResult } from "./types.js";
 import { serializeBatchForSummarizer, serializeBatchesForSummarizer } from "./batch-capture.js";
 
@@ -65,12 +65,18 @@ export async function summarizeBatch(
 ): Promise<SummarizeResult | null> {
   try {
     const model = resolveModel(config, ctx);
-
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) {
-      ctx.ui.notify(`pruner: summarization failed: ${auth.error}`, "error");
+    if (!model) {
+      ctx.ui.notify("pruner: summarization failed: no active model", "error");
       return null;
     }
+
+    if (!ctx.modelRegistry.isProviderRequestReady(model.provider)) {
+      ctx.ui.notify(`pruner: summarization failed: model ${model.provider}/${model.id} is not ready (missing API key or login)`, "error");
+      return null;
+    }
+
+    const apiKey = await ctx.modelRegistry.getApiKey(model);
+    const headers = model.headers;
 
     const serialized = serializeBatchForSummarizer(batch);
     const userMessage =
@@ -87,7 +93,7 @@ export async function summarizeBatch(
           },
         ],
       },
-      { apiKey: auth.apiKey, headers: auth.headers }
+      { apiKey, headers }
     );
 
     const llmText = response.content
@@ -130,12 +136,18 @@ export async function summarizeBatches(
 
   try {
     const model = resolveModel(config, ctx);
-
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok) {
-      ctx.ui.notify(`pruner: summarization failed: ${auth.error}`, "error");
+    if (!model) {
+      ctx.ui.notify("pruner: batch summarization failed: no active model", "error");
       return null;
     }
+
+    if (!ctx.modelRegistry.isProviderRequestReady(model.provider)) {
+      ctx.ui.notify(`pruner: batch summarization failed: model ${model.provider}/${model.id} is not ready (missing API key or login)`, "error");
+      return null;
+    }
+
+    const apiKey = await ctx.modelRegistry.getApiKey(model);
+    const headers = model.headers;
 
     const serialized = serializeBatchesForSummarizer(batches);
     const userMessage =
@@ -152,7 +164,7 @@ export async function summarizeBatches(
           },
         ],
       },
-      { apiKey: auth.apiKey, headers: auth.headers }
+      { apiKey, headers }
     );
 
     const llmText = response.content

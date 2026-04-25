@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
 import type { CapturedBatch, IndexEntryData, ToolCallRecord } from "./types.js";
 import { CUSTOM_TYPE_INDEX } from "./types.js";
 

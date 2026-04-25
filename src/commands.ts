@@ -4,11 +4,11 @@ import {
   PRUNE_ON_MODES,
   STATUS_WIDGET_ID,
 } from "./types.js";
-import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import { saveConfig } from "./config.js";
 import { formatTokens, formatCost } from "./stats.js";
-import { Container, type Component, Text, SettingsList, type SettingItem } from "@mariozechner/pi-tui";
-import { DynamicBorder, getSettingsListTheme } from "@mariozechner/pi-coding-agent";
+import { Container, type Component, Text, SettingsList, type SettingItem } from "@gsd/pi-tui";
+import { DynamicBorder, getSettingsListTheme } from "@gsd/pi-coding-agent";
 import { buildPruneTree, TreeBrowser } from "./tree-browser.js";
 import type { ToolCallIndexer } from "./indexer.js";
 

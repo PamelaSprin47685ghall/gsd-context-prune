@@ -1,6 +1,6 @@
 import { Type } from "@sinclair/typebox";
-import { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@mariozechner/pi-coding-agent";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { truncateHead, DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@gsd/pi-coding-agent";
+import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import type { ToolCallIndexer } from "./indexer.js";
 
 export function registerQueryTool(pi: ExtensionAPI, indexer: ToolCallIndexer): void {

@@ -41,7 +41,7 @@ export function captureBatch(
       return {
         toolCallId: block.id,
         toolName: block.name,
-        args: block.input ?? block.args ?? {},
+        args: block.arguments ?? block.input ?? block.args ?? {},
         resultText,
         isError,
       } satisfies CapturedToolCall;
