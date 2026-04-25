@@ -26,6 +26,24 @@ import { STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT }
 import { StatsAccumulator } from "./src/stats.js";
 import { registerContextPruneTool } from "./src/context-prune-tool.js";
 
+const PLUGIN_NAME = "gsd-context-prune";
+
+function logFlushDiagnostic(
+  phase: string,
+  cause: string,
+  scenarioId: string,
+  details?: Record<string, unknown>,
+): void {
+  const suffix = Object.entries(details ?? {})
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(" ");
+
+  process.stderr.write(
+    `[pruner-diagnostic plugin=${PLUGIN_NAME} phase=${phase} cause=${cause} scenarioId=${scenarioId}]${suffix ? ` ${suffix}` : ""}\n`,
+  );
+}
+
 export default function (pi: ExtensionAPI) {
   // Shared mutable config reference — updated by /pruner commands
   const currentConfig: { value: ContextPruneConfig } = {
@@ -41,47 +59,121 @@ export default function (pi: ExtensionAPI) {
   // Pending batches — accumulated until the prune trigger fires
   const pendingBatches: CapturedBatch[] = [];
 
+  // Increments whenever branch/session lifecycle changes to invalidate stale in-flight flushes.
+  let pendingGeneration = 0;
+
+  // Serializes flushes so queue draining + index writes do not overlap.
+  let flushInFlight: Promise<void> | null = null;
+
+  const resetPendingBatches = (reason: "session-start" | "session-tree") => {
+    pendingGeneration += 1;
+    const droppedPendingBatches = pendingBatches.length;
+    pendingBatches.length = 0;
+
+    logFlushDiagnostic("queue-reset", "pending-generation-advanced", reason, {
+      pendingGeneration,
+      droppedPendingBatches,
+      inFlight: flushInFlight ? "yes" : "no",
+    });
+  };
+
   // Summarizes + indexes all pending batches in a single LLM call and injects steer messages.
   // Called immediately in "every-turn" and "agentic-auto" modes, deferred otherwise.
-  const flushPending = async (ctx: any) => {
-    if (pendingBatches.length === 0) return;
-    const batches = pendingBatches.splice(0); // drain atomically
-
-    ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: summarizing…");
-
-    // Batch all pending batches into a single LLM call
-    const result = await summarizeBatches(batches, currentConfig.value, ctx);
-
-    if (result) {
-      // Accumulate token/cost stats from this summarizer call
-      statsAccum.add(result.usage);
-      statsAccum.persist(pi);
-
-      // Index ALL batches and send one combined summary message
-      for (const batch of batches) {
-        indexer.addBatch(batch, pi);
-      }
-
-      const allToolCallIds = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolCallId));
-      const allToolNames = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolName));
-
-      pi.sendMessage(
-        {
-          customType: "context-prune-summary",
-          content: result.summaryText,
-          display: true,
-          details: {
-            toolCallIds: allToolCallIds,
-            toolNames: allToolNames,
-            turnIndex: batches[0].turnIndex, // first turn of the batch
-            timestamp: batches[batches.length - 1].timestamp, // last timestamp
-          },
-        },
-        { deliverAs: "steer" }
-      );
+  const flushPending = async (ctx: any, scenarioId = "unspecified"): Promise<void> => {
+    if (flushInFlight) {
+      logFlushDiagnostic("flush-await", "existing-flush-in-flight", scenarioId, {
+        pendingGeneration,
+        queuedBatches: pendingBatches.length,
+      });
+      await flushInFlight;
     }
 
-    ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value, statsAccum.getStats()));
+    if (pendingBatches.length === 0) {
+      logFlushDiagnostic("flush-skip", "no-pending-batches", scenarioId, {
+        pendingGeneration,
+      });
+      return;
+    }
+
+    const drainGeneration = pendingGeneration;
+    const batches = pendingBatches.splice(0); // drain atomically
+    const batchCount = batches.length;
+    const toolCallCount = batches.reduce((total, batch) => total + batch.toolCalls.length, 0);
+
+    logFlushDiagnostic("flush-start", "pending-batches-drained", scenarioId, {
+      pendingGeneration: drainGeneration,
+      batchCount,
+      toolCallCount,
+    });
+
+    const run = (async () => {
+      ctx.ui.setStatus(STATUS_WIDGET_ID, "prune: summarizing…");
+
+      // Batch all pending batches into a single LLM call
+      const result = await summarizeBatches(batches, currentConfig.value, ctx);
+
+      if (drainGeneration !== pendingGeneration) {
+        logFlushDiagnostic("flush-end", "discarded-stale-generation", scenarioId, {
+          drainedGeneration: drainGeneration,
+          currentGeneration: pendingGeneration,
+          batchCount,
+          toolCallCount,
+        });
+        return;
+      }
+
+      if (result) {
+        // Accumulate token/cost stats from this summarizer call
+        statsAccum.add(result.usage);
+        statsAccum.persist(pi);
+
+        // Index ALL batches and send one combined summary message
+        for (const batch of batches) {
+          indexer.addBatch(batch, pi);
+        }
+
+        const allToolCallIds = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolCallId));
+        const allToolNames = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolName));
+
+        pi.sendMessage(
+          {
+            customType: "context-prune-summary",
+            content: result.summaryText,
+            display: true,
+            details: {
+              toolCallIds: allToolCallIds,
+              toolNames: allToolNames,
+              turnIndex: batches[0].turnIndex, // first turn of the batch
+              timestamp: batches[batches.length - 1].timestamp, // last timestamp
+            },
+          },
+          { deliverAs: "steer" }
+        );
+
+        logFlushDiagnostic("flush-end", "summary-indexed", scenarioId, {
+          pendingGeneration,
+          batchCount,
+          toolCallCount: allToolCallIds.length,
+        });
+        return;
+      }
+
+      logFlushDiagnostic("flush-end", "summarizer-returned-null", scenarioId, {
+        pendingGeneration,
+        batchCount,
+        toolCallCount,
+      });
+    })();
+
+    flushInFlight = run;
+    try {
+      await run;
+    } finally {
+      if (flushInFlight === run) {
+        flushInFlight = null;
+      }
+      ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value, statsAccum.getStats()));
+    }
   };
 
   // ── Helper: toggle context_prune tool activation based on config ───────────
@@ -103,6 +195,9 @@ export default function (pi: ExtensionAPI) {
 
   // ── session_start: restore config + index + stats ────────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
+    // Invalidate any in-flight flush spawned by the previous session tree.
+    resetPendingBatches("session-start");
+
     // Load config from ~/.pi/agent/context-prune/settings.json
     currentConfig.value = await loadConfig();
 
@@ -111,9 +206,6 @@ export default function (pi: ExtensionAPI) {
 
     // Rebuild stats accumulator from persisted session entries
     statsAccum.reconstructFromSession(ctx);
-
-    // Clear any batches queued before the session reload
-    pendingBatches.length = 0;
 
     // Update footer status
     ctx.ui.setStatus(STATUS_WIDGET_ID, pruneStatusText(currentConfig.value, statsAccum.getStats()));
@@ -129,10 +221,11 @@ export default function (pi: ExtensionAPI) {
 
   // Rebuild index and stats after tree navigation too (branch may have different history)
   pi.on("session_tree", async (_event, ctx) => {
+    // Pending batches belong to the old branch; also invalidates stale in-flight flushes.
+    resetPendingBatches("session-tree");
+
     indexer.reconstructFromSession(ctx);
     statsAccum.reconstructFromSession(ctx);
-    // Pending batches belong to the old branch — discard them
-    pendingBatches.length = 0;
   });
 
   // ── turn_end: capture batch, flush immediately or queue ──────────────────
@@ -145,7 +238,7 @@ export default function (pi: ExtensionAPI) {
       // Text-only turn: the agent sent a final message with no tool calls.
       // In "agent-message" mode, this is the trigger to flush pending batches.
       if (currentConfig.value.pruneOn === "agent-message") {
-        await flushPending(ctx);
+        await flushPending(ctx, "agent-message-text-turn");
       }
       return;
     }
@@ -159,9 +252,16 @@ export default function (pi: ExtensionAPI) {
     if (batch.toolCalls.length === 0) return;
 
     pendingBatches.push(batch);
+    logFlushDiagnostic("queue-enqueue", "captured-tool-batch", "turn_end", {
+      pendingGeneration,
+      pendingCount: pendingBatches.length,
+      turnIndex: batch.turnIndex,
+      toolCallCount: batch.toolCalls.length,
+      pruneOn: currentConfig.value.pruneOn,
+    });
 
     if (currentConfig.value.pruneOn === "every-turn") {
-      await flushPending(ctx);
+      await flushPending(ctx, "every-turn");
     } else {
       // Let the user know a batch is queued
       const n = pendingBatches.length;
@@ -193,7 +293,7 @@ export default function (pi: ExtensionAPI) {
     if (event.toolName !== "context_tag") return;
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "on-context-tag") return;
-    await flushPending(ctx);
+    await flushPending(ctx, "context-tag");
   });
 
   // ── agent_end: safety net flush for agent-message and agentic-auto modes ──────
@@ -203,7 +303,7 @@ export default function (pi: ExtensionAPI) {
     if (!currentConfig.value.enabled) return;
     if (currentConfig.value.pruneOn !== "agent-message" && currentConfig.value.pruneOn !== "agentic-auto") return;
     if (pendingBatches.length === 0) return;
-    await flushPending(ctx);
+    await flushPending(ctx, "agent-end-safety-net");
   });
 
   // ── context: prune summarized tool results from next LLM call ─────────────

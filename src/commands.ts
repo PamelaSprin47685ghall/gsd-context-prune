@@ -127,7 +127,7 @@ Settings are saved to ~/.pi/agent/context-prune/settings.json`;
 export function registerCommands(
   pi: ExtensionAPI,
   currentConfig: { value: ContextPruneConfig },
-  flushPending: (ctx: ExtensionCommandContext) => void,
+  flushPending: (ctx: ExtensionCommandContext, scenarioId?: string) => Promise<void>,
   syncToolActivation: () => void,
   getStats: () => SummarizerStats,
   indexer: ToolCallIndexer,
@@ -373,7 +373,7 @@ export function registerCommands(
             ctx.ui.notify("Context pruning is disabled. Run /pruner on first.", "warning");
             return;
           }
-          flushPending(ctx);
+          await flushPending(ctx, "manual-now");
           break;
         }
 

@@ -20,7 +20,7 @@ import { CONTEXT_PRUNE_TOOL_NAME } from "./types.js";
  */
 export function registerContextPruneTool(
   pi: ExtensionAPI,
-  flushPending: (ctx: ExtensionContext) => Promise<void>,
+  flushPending: (ctx: ExtensionContext, scenarioId?: string) => Promise<void>,
 ): void {
   pi.registerTool({
     name: CONTEXT_PRUNE_TOOL_NAME,
@@ -39,7 +39,7 @@ export function registerContextPruneTool(
 
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       try {
-        await flushPending(ctx);
+        await flushPending(ctx, "agentic-auto-tool");
         return {
           content: [
             {
