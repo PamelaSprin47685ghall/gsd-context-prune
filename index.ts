@@ -29,6 +29,7 @@ import { registerContextPruneTool } from "./src/context-prune-tool.js";
 const PLUGIN_NAME = "gsd-context-prune";
 
 function logFlushDiagnostic(
+  ctx: any,
   phase: string,
   cause: string,
   scenarioId: string,
@@ -39,8 +40,9 @@ function logFlushDiagnostic(
     .map(([key, value]) => `${key}=${String(value)}`)
     .join(" ");
 
-  process.stderr.write(
-    `[pruner-diagnostic plugin=${PLUGIN_NAME} phase=${phase} cause=${cause} scenarioId=${scenarioId}]${suffix ? ` ${suffix}` : ""}\n`,
+  ctx.ui.notify(
+    `[pruner] ${phase} ${cause} ${scenarioId}${suffix ? ` ${suffix}` : ""}`,
+    "info"
   );
 }
 
@@ -65,12 +67,12 @@ export default function (pi: ExtensionAPI) {
   // Serializes flushes so queue draining + index writes do not overlap.
   let flushInFlight: Promise<void> | null = null;
 
-  const resetPendingBatches = (reason: "session-start" | "session-tree") => {
+  const resetPendingBatches = (ctx: any, reason: "session-start" | "session-tree") => {
     pendingGeneration += 1;
     const droppedPendingBatches = pendingBatches.length;
     pendingBatches.length = 0;
 
-    logFlushDiagnostic("queue-reset", "pending-generation-advanced", reason, {
+    logFlushDiagnostic(ctx, "queue-reset", "pending-generation-advanced", reason, {
       pendingGeneration,
       droppedPendingBatches,
       inFlight: flushInFlight ? "yes" : "no",
@@ -158,7 +160,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      logFlushDiagnostic("flush-end", "summarizer-returned-null", scenarioId, {
+      logFlushDiagnostic(ctx, "flush-end", "summarizer-returned-null", scenarioId, {
         pendingGeneration,
         batchCount,
         toolCallCount,
@@ -196,7 +198,7 @@ export default function (pi: ExtensionAPI) {
   // ── session_start: restore config + index + stats ────────────────────────────────
   pi.on("session_start", async (_event, ctx) => {
     // Invalidate any in-flight flush spawned by the previous session tree.
-    resetPendingBatches("session-start");
+    resetPendingBatches(ctx, "session-start");
 
     // Load config from ~/.pi/agent/context-prune/settings.json
     currentConfig.value = await loadConfig();
@@ -222,7 +224,7 @@ export default function (pi: ExtensionAPI) {
   // Rebuild index and stats after tree navigation too (branch may have different history)
   pi.on("session_tree", async (_event, ctx) => {
     // Pending batches belong to the old branch; also invalidates stale in-flight flushes.
-    resetPendingBatches("session-tree");
+    resetPendingBatches(ctx, "session-tree");
 
     indexer.reconstructFromSession(ctx);
     statsAccum.reconstructFromSession(ctx);
@@ -252,7 +254,7 @@ export default function (pi: ExtensionAPI) {
     if (batch.toolCalls.length === 0) return;
 
     pendingBatches.push(batch);
-    logFlushDiagnostic("queue-enqueue", "captured-tool-batch", "turn_end", {
+    logFlushDiagnostic(ctx, "queue-enqueue", "captured-tool-batch", "turn_end", {
       pendingGeneration,
       pendingCount: pendingBatches.length,
       turnIndex: batch.turnIndex,
