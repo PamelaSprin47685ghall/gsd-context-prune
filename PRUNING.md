@@ -98,7 +98,7 @@ In a long session this can grow to **30k–100k+ tokens**. The model pays for ev
 │               an API and displays it in a table...                      │
 │                                                                         │
 │  [summary]    ╔════════════════════════════════════════════╗            │
-│               ║ ⚃  Summary of Turns 1-5 (5 tool calls)     ║            │
+│               ║ ⚃  Summary of Turns 1-5 (useful signal)   ║            │
 │               ║                                            ║            │
 │               ║ • Read existing App.tsx and package.json   ║            │
 │               ║ • Searched React Table docs; decided on    ║            │
@@ -108,7 +108,7 @@ In a long session this can grow to **30k–100k+ tokens**. The model pays for ev
 │               ║ • Build failed: circular dependency in     ║            │
 │               ║   utils/index.ts → fix by inlining helpers ║            │
 │               ║                                            ║            │
-│               ║ Summarized toolCallIds: tc-001..tc-007     ║            │
+│               ║ Pruned toolCallIds: tc-001..tc-007        ║            │
 │               ║ Use context_tree_query to retrieve original║            │
 │               ╚════════════════════════════════════════════╝            │
 │               ← ~200 tokens (was ~6,760 tokens)                         │
@@ -167,7 +167,7 @@ graph TB
 
 - The `AssistantMessage` tool-call blocks are **kept** (they carry `toolCallId`s the model may reference later)
 - Only `ToolResultMessage` entries are **removed** from future context
-- Every pruned tool call is also copied into the pruner's runtime/session index with its `toolCallId`, tool name, args, status, turn index, timestamp, and full `resultText`
+- Every pruned tool call ID is listed in the summary footer so its full original output can be recovered. The hot summary may omit low-value details that the summarizer judges not worth carrying forward.
 - A summary message is injected as a "steer" (guaranteed to land before the next LLM call)
 - The session file retains the original history, and the pruner keeps an index of summarized tool outputs — pruning affects only what the *next* request sees in active context
 
@@ -195,7 +195,7 @@ That distinction is the core idea:
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  [summary]  ... build failed: circular dependency ...                   │
-│             Summarized toolCallIds: `tc-006`                            │
+│             Pruned toolCallIds: `tc-006`                                │
 │             Use context_tree_query to retrieve originals                │
 │                                                                         │
 │  ── LLM calls context_tree_query({ toolCallIds: ["tc-006"] }) ──        │

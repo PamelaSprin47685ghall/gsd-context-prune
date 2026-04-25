@@ -3,22 +3,31 @@ import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import type { CapturedBatch, ContextPruneConfig, SummarizeResult } from "./types.js";
 import { serializeBatchForSummarizer, serializeBatchesForSummarizer } from "./batch-capture.js";
 
+const SUMMARY_OMISSION_GUIDANCE = `Hot-context budget matters more than one-bullet-per-tool completeness.
+Summarize durable signal only: facts, decisions, failures, file paths, commands, outputs, or constraints that future reasoning may need.
+Omit low-value noise from the hot summary, such as successful no-op edits, directory listings with no finding, repeated status checks, or outputs fully superseded by later calls.
+Do not invent facts for omitted calls. All original outputs remain recoverable with context_tree_query by toolCallId.`;
+
 const SYSTEM_PROMPT = `You are summarizing a batch of tool calls made by an AI coding assistant.
-For each tool call provide:
+For useful tool calls provide:
 - Tool name and a one-sentence description of what it did
 - Key outcome: success/failure and the most important data returned
 - Any findings the future conversation needs to remember
 
-Keep each tool call to 1-3 bullet points. Be concise.`;
+${SUMMARY_OMISSION_GUIDANCE}
+
+Keep useful tool calls to 1-3 bullet points. Be concise.`;
 
 /** System prompt for batched summarization (multiple turns in one call). */
 const BATCHED_SYSTEM_PROMPT = `You are summarizing multiple turns of tool calls made by an AI coding assistant.
-For each turn, provide a concise summary of all tool calls in that turn:
+For each turn, provide a concise summary of useful tool calls in that turn:
 - Tool name and a one-sentence description of what it did
 - Key outcome: success/failure and the most important data returned
 - Any findings the future conversation needs to remember
 
-Keep each tool call to 1-3 bullet points. Group by turn. Be concise.`;
+${SUMMARY_OMISSION_GUIDANCE}
+
+Keep useful tool calls to 1-3 bullet points. Group by turn. Be concise.`;
 
 /**
  * Returns the model to use for summarization.
@@ -104,8 +113,9 @@ export async function summarizeBatch(
     const toolCallIds = batch.toolCalls.map((tc) => tc.toolCallId);
     const idList = toolCallIds.map((id) => `\`${id}\``).join(", ");
     const footer =
-      `\n\n---\n**Summarized toolCallIds**: ${idList}\n` +
-      `Use \`context_tree_query\` with these IDs to retrieve the original full outputs.`;
+      `\n\n---\n**Pruned toolCallIds**: ${idList}\n` +
+      `Some low-value tool outputs may be intentionally omitted from the hot summary. ` +
+      `Use \`context_tree_query\` with any listed ID to retrieve the original full output.`;
 
     return {
       summaryText: llmText + footer,
@@ -172,12 +182,13 @@ export async function summarizeBatches(
       .map((c: any) => c.text)
       .join("\n");
 
-    // Collect ALL toolCallIds across all batches for the footer
+    // Collect ALL toolCallIds across all batches for recovery, including calls the summarizer omitted from the hot summary.
     const allToolCallIds = batches.flatMap((b) => b.toolCalls.map((tc) => tc.toolCallId));
     const idList = allToolCallIds.map((id) => `\`${id}\``).join(", ");
     const footer =
-      `\n\n---\n**Summarized toolCallIds**: ${idList}\n` +
-      `Use \`context_tree_query\` with these IDs to retrieve the original full outputs.`;
+      `\n\n---\n**Pruned toolCallIds**: ${idList}\n` +
+      `Some low-value tool outputs may be intentionally omitted from the hot summary. ` +
+      `Use \`context_tree_query\` with any listed ID to retrieve the original full output.`;
 
     return {
       summaryText: llmText + footer,

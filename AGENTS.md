@@ -82,8 +82,8 @@ Single source of truth for all interfaces and constants:
 
 ### `src/summarizer.ts` — LLM summarization
 - **`resolveModel(config, ctx)`** — resolves `config.summarizerModel` to a model instance. `"default"` returns `ctx.model`; `"provider/model-id"` splits on `/` and looks up via `ctx.modelRegistry.find(provider, modelId)` with a fallback to `ctx.model` + warning on failure.
-- **`summarizeBatch(batch, config, ctx)`** — summarizes a single `CapturedBatch` in one LLM call. Returns `SummarizeResult` (summary text + usage) on success, `null` on failure.
-- **`summarizeBatches(batches, config, ctx)`** — summarizes multiple `CapturedBatch` objects in a **single LLM call**. If only one batch, delegates to `summarizeBatch`. Returns `SummarizeResult` on success, `null` on failure.
+- **`summarizeBatch(batch, config, ctx)`** — summarizes a single `CapturedBatch` in one LLM call. The summarizer keeps durable signal and may omit low-value noise from the hot summary while the footer lists all pruned IDs. Returns `SummarizeResult` (summary text + usage) on success, `null` on failure.
+- **`summarizeBatches(batches, config, ctx)`** — summarizes multiple `CapturedBatch` objects in a **single LLM call**. If only one batch, delegates to `summarizeBatch`. All pending tool outputs are sent to the summarizer; low-value details may be omitted from the generated hot summary, but every original output remains indexed. Returns `SummarizeResult` on success, `null` on failure.
 
 ### `src/indexer.ts` — `ToolCallIndexer` class
 Maintains the runtime `Map<toolCallId, ToolCallRecord>` and handles session persistence:

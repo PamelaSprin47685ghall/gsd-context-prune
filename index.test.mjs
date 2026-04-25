@@ -6,6 +6,7 @@ const indexSource = readFileSync(new URL("./index.ts", import.meta.url), "utf8")
 const typesSource = readFileSync(new URL("./src/types.ts", import.meta.url), "utf8");
 const commandsSource = readFileSync(new URL("./src/commands.ts", import.meta.url), "utf8");
 const contextPruneToolSource = readFileSync(new URL("./src/context-prune-tool.ts", import.meta.url), "utf8");
+const summarizerSource = readFileSync(new URL("./src/summarizer.ts", import.meta.url), "utf8");
 
 test("serializes flush execution and invalidates stale queue generations across session boundaries", () => {
   assert.match(indexSource, /let pendingGeneration = 0/);
@@ -41,6 +42,15 @@ test("agent_end safety net only flushes agent-message mode, not agentic-auto", (
   assert.match(indexSource, /agent_end: safety net flush for agent-message mode/);
   assert.match(indexSource, /if \(currentConfig\.value\.pruneOn !== "agent-message"\) return/);
   assert.doesNotMatch(indexSource, /pruneOn !== "agent-message" && currentConfig\.value\.pruneOn !== "agentic-auto"/);
+});
+
+test("summarizer may omit low-value details without making the main agent choose IDs", () => {
+  assert.match(contextPruneToolSource, /parameters: Type\.Object\(\{\}\)/);
+  assert.doesNotMatch(contextPruneToolSource, /discardToolCallIds|discardReason/);
+  assert.doesNotMatch(typesSource, /PruneSummaryOptions|discardToolCallIds|discardReason/);
+  assert.match(summarizerSource, /Omit low-value noise from the hot summary/);
+  assert.match(summarizerSource, /Pruned toolCallIds/);
+  assert.match(summarizerSource, /including calls the summarizer omitted from the hot summary/);
 });
 
 test("awaits flush completion for manual and agentic tool triggers", () => {

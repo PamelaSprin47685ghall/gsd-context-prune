@@ -128,8 +128,9 @@ All changes are saved immediately to `~/.pi/agent/context-prune/settings.json` a
 When pruning is on, the LLM sees compact summary messages instead of raw tool outputs. Each summary ends with:
 
 ```
-Summarized toolCallIds: `abc12345`, `def67890`
-Use `context_tree_query` with these IDs to retrieve the original full outputs.
+Pruned toolCallIds: `abc12345`, `def67890`
+Some low-value tool outputs may be intentionally omitted from the hot summary.
+Use `context_tree_query` with any listed ID to retrieve the original full output.
 ```
 
 The LLM can call `context_tree_query` with those IDs to get the full original output at any time, without those outputs permanently inflating context. The tool is always available when the extension is loaded.
@@ -139,8 +140,9 @@ The LLM can call `context_tree_query` with those IDs to get the full original ou
 When `pruneOn` is set to `agentic-auto`, the `context_prune` tool is activated and made available to the LLM. It is removed from the active tool list in all other modes.
 
 When the model calls `context_prune`:
-- All pending tool-call batches are summarized in a single LLM call
-- The original outputs are pruned from future context
+- All pending tool-call batches are sent to the summarizer in a single LLM call
+- The summarizer keeps durable signal in the hot summary and may omit low-value noise
+- The original outputs are pruned from future context and preserved for `context_tree_query`
 - A summary message is injected as a steer
 
 The tool is guided by a system prompt that instructs the model to use it after completing a meaningful batch of work (not after every trivial call). In `agentic-auto` mode, pending batches are not flushed automatically when the agent ends; they remain queued unless the model calls `context_prune` or the user manually runs `/pruner now`.
