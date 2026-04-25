@@ -44,7 +44,7 @@ export function registerContextPruneTool(
           content: [
             {
               type: "text",
-              text: "Context prune completed. Pending tool-call results have been summarized and pruned from context. Use context_tree_query with the toolCallIds from the summary to retrieve full outputs if needed.",
+              text: "Context prune sidecar scheduled. Normal work can continue; the UI will notify when summarization completes and projected history has been replaced.",
             },
           ],
         };

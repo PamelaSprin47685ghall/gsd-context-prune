@@ -4,7 +4,7 @@ import { getMarkdownTheme } from "@gsd/pi-coding-agent";
 import type { Theme } from "@gsd/pi-coding-agent";
 import type { ExtensionCommandContext } from "@gsd/pi-coding-agent";
 import type { ToolCallRecord } from "./types.js";
-import { CUSTOM_TYPE_SUMMARY } from "./types.js";
+import { CUSTOM_TYPE_REWRITE, CUSTOM_TYPE_SUMMARY } from "./types.js";
 import type { ToolCallIndexer } from "./indexer.js";
 
 // ── Tree node types ─────────────────────────────────────────────────────────
@@ -98,16 +98,28 @@ export function buildPruneTree(
   let summaryIndex = 0;
 
   for (const entry of branch) {
-    if (entry.type !== "custom_message") continue;
-    const customEntry = entry as any;
-    if (customEntry.customType !== CUSTOM_TYPE_SUMMARY) continue;
-
-    const details = customEntry.details as {
+    let summaryText = "";
+    let details: {
       toolCallIds: string[];
       toolNames: string[];
       turnIndex: number;
       timestamp: number;
     } | undefined;
+
+    if (entry.type === "custom_message") {
+      const customEntry = entry as any;
+      if (customEntry.customType !== CUSTOM_TYPE_SUMMARY) continue;
+      details = customEntry.details;
+      summaryText = typeof customEntry.content === "string" ? customEntry.content : "";
+    } else if (entry.type === "custom") {
+      const customEntry = entry as any;
+      if (customEntry.customType !== CUSTOM_TYPE_REWRITE) continue;
+      const data = customEntry.data;
+      details = data;
+      summaryText = typeof data?.summaryText === "string" ? data.summaryText : "";
+    } else {
+      continue;
+    }
 
     const toolCallIds = details?.toolCallIds ?? [];
     const turnIndex = details?.turnIndex ?? "?";
@@ -122,8 +134,6 @@ export function buildPruneTree(
       children.push(toolCallNode(record, 1));
     }
 
-    const summaryText =
-      typeof customEntry.content === "string" ? customEntry.content : "";
     const summaryChars = summaryText.length;
     const totalOriginalChars = children.reduce(
       (sum, c) => sum + (c.charCount ?? 0),

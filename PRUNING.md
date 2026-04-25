@@ -166,10 +166,10 @@ graph TB
 **Key points:**
 
 - The `AssistantMessage` tool-call blocks are **kept** (they carry `toolCallId`s the model may reference later)
-- Only `ToolResultMessage` entries are **removed** from future context
+- Matching `ToolResultMessage` entries are **removed** from the projected branch after sidecar summarization completes
 - Every pruned tool call ID is listed in the summary footer so its full original output can be recovered. The hot summary may omit low-value details that the summarizer judges not worth carrying forward.
-- A summary message is injected as a "steer" (guaranteed to land before the next LLM call)
-- The session file retains the original history, and the pruner keeps an index of summarized tool outputs — pruning affects only what the *next* request sees in active context
+- The summary message is projected at the first removed tool-result position, so future LLM calls see a coherent rewritten history
+- The underlying session file retains the original history; rewrite metadata and raw-output indexes are append-only plugin entries
 
 ---
 
@@ -177,10 +177,11 @@ graph TB
 
 Pruning does **not** delete data. It moves raw tool results out of the hot path (active LLM context) and into an indexed archive the model can query later.
 
-There are two separate things happening during pruning:
+There are three separate things happening during pruning:
 
-1. **Context filtering:** future requests stop including the old `toolResult` messages.
-2. **Index preservation:** the extension stores each summarized tool call in the pruner index, keyed by `toolCallId`.
+1. **Sidecar summarization:** queued batches are summarized outside the main agent path.
+2. **Branch projection:** future requests see a rewritten branch where old `toolResult` messages are replaced by the summary.
+3. **Index preservation:** the extension stores each summarized tool call in the pruner index, keyed by `toolCallId`.
 
 That distinction is the core idea:
 
@@ -288,7 +289,7 @@ raw tool results exist in context
         ▼
 batch gets summarized
         │
-        ├─► summary message added to context
+        ├─► summary projected into future context
         │      └─► includes summarized toolCallIds
         │
         ├─► tool results indexed by toolCallId

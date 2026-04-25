@@ -60,7 +60,7 @@ const SUBCOMMANDS = [
   { value: "prune-on", label: "prune-on — show or set the trigger mode" },
   { value: "stats",   label: "stats    — show cumulative summarizer token/cost stats" },
   { value: "tree",    label: "tree     — browse pruned tool calls in a foldable tree" },
-  { value: "now",     label: "now      — flush pending tool calls immediately" },
+  { value: "now",     label: "now      — schedule sidecar summarization for pending tool calls" },
   { value: "help",    label: "help     — show this help" },
 ] as const;
 
@@ -103,7 +103,7 @@ Usage:
   /pruner prune-on agentic-auto            LLM decides when to prune via context_prune tool (default; no agent_end flush)
   /pruner stats                            Show cumulative summarizer token/cost stats
   /pruner tree                             Browse pruned tool calls in a foldable tree (Ctrl-O opens selected summary)
-  /pruner now                              Flush pending tool calls immediately
+  /pruner now                              Schedule sidecar summarization for pending tool calls
   /pruner help                             Show this help
 
 Mode guidance:

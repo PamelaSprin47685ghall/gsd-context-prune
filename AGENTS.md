@@ -32,7 +32,7 @@ pi-context-prune/
     ├── batch-capture.ts       # Serialize turn_end events into CapturedBatch objects
     ├── summarizer.ts          # LLM call that summarizes a CapturedBatch to markdown
     ├── indexer.ts             # Runtime Map<toolCallId, ToolCallRecord> + session persistence
-    ├── pruner.ts              # Filter context event messages (removes summarized ToolResultMessages)
+    ├── branch-rewriter.ts     # Sidecar rewrite metadata + projected session branch
     ├── query-tool.ts          # Register the context_tree_query tool for recovering pruned outputs
     ├── stats.ts               # StatsAccumulator for cumulative summarizer token/cost tracking
     └── commands.ts            # /pruner command + interactive settings overlay + summary message renderer
@@ -41,16 +41,16 @@ pi-context-prune/
 ### `index.ts` — Extension entry point
 Wires all modules together and registers Pi event handlers:
 - **`pendingBatches: CapturedBatch[]`** — queue of captured batches not yet summarized; drained by `flushPending`.
-- **`flushPending(ctx)`** — summarizes + indexes all pending batches in a **single LLM call** and injects one combined steer message. Sets status to "prune: summarizing…" while working, then restores the status widget with stats (e.g. `prune: ON (Every turn) │ ↑1.2k ↓340 $0.003`). Accumulates summarizer token/cost stats via `StatsAccumulator` and persists them to session. Called immediately on `every-turn`, by the `context_prune` tool in `agentic-auto`, or deferred to the trigger event for other modes.
-- **`session_start`** — loads config from `~/.pi/agent/context-prune/settings.json`, rebuilds the in-memory index and stats accumulator, clears `pendingBatches`, updates the footer status widget, and notifies the user of the loaded state.
-- **`session_tree`** — rebuilds the index and stats accumulator after branch navigation (pending batches and stats belong to the current branch).
+- **`flushPending(ctx)`** — schedules sidecar summarization and returns without blocking the main agent path. The sidecar drains pending batches, summarizes them in a single LLM call, persists raw-output indexes and rewrite metadata, updates stats, and notifies the UI when projected history has been replaced. If another trigger arrives while a sidecar is running, it marks a follow-up drain so newly queued batches are summarized after the current sidecar completes.
+- **`session_start`** — loads config from `~/.pi/agent/context-prune/settings.json`, rebuilds the in-memory index, branch rewriter, and stats accumulator, clears `pendingBatches`, updates the footer status widget, and notifies the user of the loaded state.
+- **`session_tree`** — rebuilds the index, branch rewriter, and stats after branch navigation (pending batches and stats belong to the current branch).
 - **`turn_end`** — captures the batch, pushes to `pendingBatches`. Behavior depends on `pruneOn` mode:
-  - `every-turn`: flushes immediately.
-  - `agent-message`: if the turn has **no** tool results (i.e., a final text-only response), flushes pending batches; otherwise queues.
+  - `every-turn`: schedules sidecar summarization immediately.
+  - `agent-message`: if the turn has **no** tool results (i.e., a final text-only response), schedules sidecar summarization; otherwise queues.
   - `on-context-tag` / `on-demand`: queues and notifies the user of pending count and trigger.
-- **`tool_execution_end`** — when `event.toolName === "context_tag"` and mode is `on-context-tag`, calls `flushPending`.
-- **`agent_end`** — safety-net flush for `agent-message` mode only: if the agent loop ends before a text-only turn fires (e.g. aborted), flushes any remaining pending batches so they aren't lost. `agentic-auto` intentionally does not flush on `agent_end`; only a model `context_prune` tool call triggers that mode automatically.
-- **`context`** — filters the message array sent to the LLM, removing `ToolResultMessage` entries that have been summarized. Returns `undefined` (no change) if the index is empty or no messages were removed.
+- **`tool_execution_end`** — when `event.toolName === "context_tag"` and mode is `on-context-tag`, schedules sidecar summarization.
+- **`agent_end`** — safety-net scheduling for `agent-message` mode only: if the agent loop ends before a text-only turn fires (e.g. aborted), schedules summarization for remaining pending batches so they aren't lost. `agentic-auto` intentionally does not flush on `agent_end`; only a model `context_prune` tool call triggers that mode automatically.
+- **`context`** — applies the `BranchRewriter` projection. Future LLM calls see one summary message at the first removed tool-result position and no raw `ToolResultMessage`s covered by completed rewrite metadata.
 
 ### `src/types.ts` — Shared types and constants
 Single source of truth for all interfaces and constants:
@@ -67,8 +67,9 @@ Single source of truth for all interfaces and constants:
 - **`ContextPruneConfig`** — `{ enabled, summarizerModel, pruneOn }` stored in `~/.pi/agent/context-prune/settings.json`.
 - **`SummarizerStats`** — cumulative token/cost stats: `{ totalInputTokens, totalOutputTokens, totalCost, callCount }`. Persisted via `pi.appendEntry(CUSTOM_TYPE_STATS, ...)`.
 - **`SummarizeResult`** — return type from summarizer: `{ summaryText, usage }` carrying both the markdown summary and LLM usage data.
-- **`SummaryMessageDetails`** — metadata attached to `context-prune-summary` custom messages.
-- Constants: `CUSTOM_TYPE_SUMMARY`, `CUSTOM_TYPE_INDEX`, `CUSTOM_TYPE_STATS`, `STATUS_WIDGET_ID`, `DEFAULT_CONFIG`, `CONTEXT_PRUNE_TOOL_NAME`, `AGENTIC_AUTO_SYSTEM_PROMPT`.
+- **`SummaryMessageDetails`** — metadata attached to projected `context-prune-summary` custom messages.
+- **`RewriteEntryData`** — metadata persisted via `CUSTOM_TYPE_REWRITE`; reconstructs sidecar branch projections across session reloads.
+- Constants: `CUSTOM_TYPE_SUMMARY`, `CUSTOM_TYPE_INDEX`, `CUSTOM_TYPE_STATS`, `CUSTOM_TYPE_REWRITE`, `STATUS_WIDGET_ID`, `DEFAULT_CONFIG`, `CONTEXT_PRUNE_TOOL_NAME`, `AGENTIC_AUTO_SYSTEM_PROMPT`.
 
 ### `src/config.ts` — Config persistence
 - **`SETTINGS_PATH`** — constant resolving to `~/.pi/agent/context-prune/settings.json` (global, project-independent).
@@ -89,11 +90,14 @@ Single source of truth for all interfaces and constants:
 Maintains the runtime `Map<toolCallId, ToolCallRecord>` and handles session persistence:
 - **`reconstructFromSession(ctx)`** — scans the current branch's session entries for `CUSTOM_TYPE_INDEX` custom entries and repopulates the in-memory map.
 - **`addBatch(batch, pi)`** — adds all records from a batch to the map and calls `pi.appendEntry(CUSTOM_TYPE_INDEX, ...)` to persist them so they survive restarts and branch switches.
-- **`isSummarized(toolCallId)`** — used by the pruner to decide which messages to drop.
+- **`isSummarized(toolCallId)`** — returns whether a raw output has been indexed.
 - **`getRecord(toolCallId)`** / **`lookupToolCalls(ids)`** — used by the query tool to retrieve full original outputs.
 
-### `src/pruner.ts` — Context message filter
-- **`pruneMessages(messages, indexer)`** — filters the `context` event's message array. Drops any message with `role === "toolResult"` whose `toolCallId` is present in the index. All other messages (including `AssistantMessage` tool-call blocks that carry the IDs) are kept so the model can still reference them when calling `context_tree_query`.
+### `src/branch-rewriter.ts` — `BranchRewriter` class
+Maintains sidecar rewrite metadata and projects future LLM context:
+- **`reconstructFromSession(ctx)`** — scans the current branch for `CUSTOM_TYPE_REWRITE` entries and rebuilds replacement records.
+- **`addReplacement(data, pi)`** — upserts the in-memory replacement and persists append-only rewrite metadata.
+- **`project(messages)`** — replaces covered `ToolResultMessage`s with one projected `context-prune-summary` custom message at the first removed result position. Assistant tool-call blocks are kept so IDs remain addressable.
 
 ### `src/query-tool.ts` — `context_tree_query` tool
 Registers a Pi tool that allows the LLM (or user) to recover pruned outputs:
@@ -130,7 +134,7 @@ Accumulates cumulative token/cost stats for summarizer LLM calls and persists th
 - **`/pruner stats`** — shows detailed cumulative summarizer token/cost stats.
 - **`/pruner model [value]`** — gets or sets the summarizer model (e.g. `anthropic/claude-haiku-3-5`).
 - **`/pruner prune-on [value]`** — gets or sets the trigger mode; bare form shows `ctx.ui.select()` picker over `PRUNE_ON_MODES`.
-- **`/pruner now`** — calls `flushPending(ctx)` immediately; guards against pruning being disabled.
+- **`/pruner now`** — schedules sidecar summarization for pending tool calls; guards against pruning being disabled.
 - **`/pruner help`** — displays `HELP_TEXT` via `ctx.ui.notify`.
 - **`default` case** — directs unknown subcommands to run `/pruner help`.
 - **Message renderer** for `context-prune-summary` — renders summary messages in the TUI with a styled header (accent color) showing turn index and tool count; collapses to header-only when not expanded, shows full content when expanded.
@@ -141,13 +145,13 @@ Accumulates cumulative token/cost stats for summarizer LLM calls and persists th
 
 | Decision | Rationale |
 |---|---|
+| Sidecar rewrite projection | Summarization runs outside the main agent path; the extension owns a rewritten branch projection instead of mutating Pi's append-only session file |
 | Pruning only `ToolResultMessage`s | `AssistantMessage` tool-call blocks (which carry IDs) are kept so the model can call `context_tree_query` by ID |
-| Steer delivery for summary messages | Ensures the summary lands in context *before* the next LLM call, not after |
 | `pi.appendEntry` for persistence | Session custom entries survive restarts and branch navigation; index is rebuilt on `session_start` / `session_tree` |
 | `summarizerModel: "default"` | Reuses the active model's credentials via `ctx.modelRegistry.getApiKeyAndHeaders()` — no hidden side-channel or extra config needed |
 | Config in `~/.pi/agent/context-prune/settings.json` | Extension owns its own file — no risk of clobbering other Pi settings, and config persists across all projects |
 | Five `pruneOn` trigger modes | `every-turn` (immediate), `on-context-tag` (aligned with save-points), `on-demand` (manual), `agent-message` (batch until final text response), `agentic-auto` (LLM decides via `context_prune` tool) — lets users trade immediacy for batch efficiency |
-| `pendingBatches` queue + `flushPending` | Decouples capture (always at `turn_end`) from summarization (mode-dependent). `flushPending` drains all pending batches into a **single** `summarizeBatches` LLM call, reducing round-trips from N to 1. |
+| `pendingBatches` queue + `flushPending` | Decouples capture (always at `turn_end`) from summarization (mode-dependent). `flushPending` schedules sidecar summarization so normal agent latency is not blocked by summarizer latency. |
 | `agent_end` safety-net flush | Prevents orphaned pending batches if the agent loop terminates before a text-only turn fires in `agent-message` mode |
 | `SettingsOverlay` wrapper | Required because `Container` alone doesn't forward keyboard input — the wrapper delegates `handleInput`/`invalidate` to the inner `SettingsList` |
 | `context` handler returns `undefined` when no pruning occurs | Avoids unnecessary message-list reconstruction when nothing was filtered |

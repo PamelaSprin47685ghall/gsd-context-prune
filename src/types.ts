@@ -1,45 +1,13 @@
 /**
  * Shared types for the context-prune extension.
  *
- * Design decisions (Phase 1):
+ * The extension captures completed tool-call turns, summarizes queued batches in
+ * a sidecar task, stores raw outputs in an append-only index, and projects a
+ * rewritten session branch for future LLM calls.
  *
- * SUMMARIZATION BATCH (Ph1 step 2):
- *   One batch = one completed assistant turn with tool calls, captured from
- *   the `turn_end` event when event.toolResults.length > 0.
- *   event.message = AssistantMessage (contains ToolCall content blocks with ids)
- *   event.toolResults = ToolResultMessage[] (one per tool call in this turn)
- *
- * STATE MODEL (Ph1 step 3):
- *   - Runtime state: Map<toolCallId, ToolCallRecord> rebuilt on session_start
- *   - Session metadata: pi.appendEntry("context-prune-index", IndexEntryData)
- *     stored once per summarized batch; NOT in LLM context
- *   - User config: .pi/settings.json → "contextPrune" key (JSON merge safe,
- *     Pi preserves unknown keys when rewriting settings files)
- *
- * CONFIG FORMAT (Ph1 step 4):
- *   { "contextPrune": { "enabled": false, "summarizerModel": "default" } }
- *   summarizerModel: "default" = use current active model (ctx.model)
- *                   "provider/model-id" = explicit model via ctx.modelRegistry.find()
- *
- * SUMMARY MESSAGE FORMAT (Ph1 step 5):
- *   customType: "context-prune-summary"
- *   content: markdown with durable signal from the tool calls + toolCallIds footer
- *   details: SummaryMessageDetails (toolCallIds, toolNames, turnIndex, timestamp)
- *   The content itself includes the toolCallIds in plain text so the model can
- *   reference them in future context_tree_query calls without needing details.
- *
- * API CONSTRAINTS (Ph1 step 6):
- *   - Pruning MUST happen in the `context` event via { messages: filtered },
- *     never by mutating session history (pi.appendEntry / session file untouched)
- *   - Summary injection uses pi.sendMessage(..., { deliverAs: "steer" }) from
- *     inside the turn_end handler so it lands before the next LLM call
- *   - Original full tool outputs are preserved in IndexEntryData (session custom
- *     entries) and accessible via context_tree_query at any time
- *   - v1 prunes only ToolResultMessage entries; the AssistantMessage tool-call
- *     blocks (which carry the toolCallIds) are intentionally kept so the model
- *     can still reference them when calling context_tree_query
- *   - "default" summarizer = ctx.model (current active model + its credentials),
- *     NOT a hidden side-channel. It makes an explicit LLM call from turn_end.
+ * The physical session JSONL remains append-only. `context-prune-rewrite`
+ * entries are plugin metadata; the `context` hook turns them into hot summary
+ * messages and removes the matching raw tool results from the projected branch.
  */
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -52,6 +20,9 @@ export const CUSTOM_TYPE_INDEX = "context-prune-index";
 
 /** customType for stats persistence entries (NOT in LLM context) */
 export const CUSTOM_TYPE_STATS = "context-prune-stats";
+
+/** customType for persisted sidecar summary replacements (NOT in LLM context) */
+export const CUSTOM_TYPE_REWRITE = "context-prune-rewrite";
 
 /** Footer status widget ID */
 export const STATUS_WIDGET_ID = "context-prune";
@@ -77,9 +48,10 @@ When NOT to use context_prune:
 - Do NOT call it for trivial or single tool calls.
 
 What happens when you call context_prune:
-- Pending tool-call results are sent to the summarizer in one batch.
-- The summarizer keeps durable signal in the hot summary and may omit low-value noise.
-- The original full outputs are removed from context but preserved in the session index.
+- Pending tool-call results are scheduled for sidecar summarization in one batch.
+- The tool returns immediately; keep working while the sidecar runs.
+- When summarization finishes, future LLM calls see a projected history where raw tool results are replaced by the summary.
+- The original full outputs remain preserved in the session index.
 - You can retrieve any pruned output at any time using the context_tree_query tool with the toolCallIds listed in the summary footer.`;
 
 // ── Config ─────────────────────────────────────────────────────────────────
@@ -185,6 +157,22 @@ export interface SummaryMessageDetails {
   toolNames: string[];
   turnIndex: number;
   timestamp: number;
+  sidecar?: boolean;
+  historyReplaced?: boolean;
+}
+
+/**
+ * Persisted metadata for one sidecar branch rewrite.
+ * The raw source history remains append-only, but the context hook projects this
+ * replacement as if the matching tool results had been atomically replaced.
+ */
+export interface RewriteEntryData {
+  summaryText: string;
+  toolCallIds: string[];
+  toolNames: string[];
+  turnIndex: number;
+  timestamp: number;
+  completedAt: number;
 }
 
 // ── Summarizer stats ────────────────────────────────────────────────────────
