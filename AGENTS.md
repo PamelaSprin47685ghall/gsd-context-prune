@@ -41,7 +41,7 @@ pi-context-prune/
 ### `index.ts` — Extension entry point
 Wires all modules together and registers Pi event handlers:
 - **`pendingBatches: CapturedBatch[]`** — queue of captured batches not yet summarized; drained by `flushPending`.
-- **`flushPending(ctx)`** — summarizes + indexes all pending batches in a **single LLM call** and injects one combined steer message. Sets status to "prune: summarizing…" while working, then restores the status widget with stats (e.g. `prune: ON (Every turn) │ ↑1.2k ↓340 $0.003`). Accumulates summarizer token/cost stats via `StatsAccumulator` and persists them to session. Called immediately on `every-turn` or `agentic-auto`, deferred to the trigger event for other modes.
+- **`flushPending(ctx)`** — summarizes + indexes all pending batches in a **single LLM call** and injects one combined steer message. Sets status to "prune: summarizing…" while working, then restores the status widget with stats (e.g. `prune: ON (Every turn) │ ↑1.2k ↓340 $0.003`). Accumulates summarizer token/cost stats via `StatsAccumulator` and persists them to session. Called immediately on `every-turn`, by the `context_prune` tool in `agentic-auto`, or deferred to the trigger event for other modes.
 - **`session_start`** — loads config from `~/.pi/agent/context-prune/settings.json`, rebuilds the in-memory index and stats accumulator, clears `pendingBatches`, updates the footer status widget, and notifies the user of the loaded state.
 - **`session_tree`** — rebuilds the index and stats accumulator after branch navigation (pending batches and stats belong to the current branch).
 - **`turn_end`** — captures the batch, pushes to `pendingBatches`. Behavior depends on `pruneOn` mode:
@@ -49,7 +49,7 @@ Wires all modules together and registers Pi event handlers:
   - `agent-message`: if the turn has **no** tool results (i.e., a final text-only response), flushes pending batches; otherwise queues.
   - `on-context-tag` / `on-demand`: queues and notifies the user of pending count and trigger.
 - **`tool_execution_end`** — when `event.toolName === "context_tag"` and mode is `on-context-tag`, calls `flushPending`.
-- **`agent_end`** — safety-net flush for `agent-message` mode: if the agent loop ends before a text-only turn fires (e.g. aborted), flushes any remaining pending batches so they aren't lost.
+- **`agent_end`** — safety-net flush for `agent-message` mode only: if the agent loop ends before a text-only turn fires (e.g. aborted), flushes any remaining pending batches so they aren't lost. `agentic-auto` intentionally does not flush on `agent_end`; only a model `context_prune` tool call triggers that mode automatically.
 - **`context`** — filters the message array sent to the LLM, removing `ToolResultMessage` entries that have been summarized. Returns `undefined` (no change) if the index is empty or no messages were removed.
 
 ### `src/types.ts` — Shared types and constants
@@ -62,7 +62,7 @@ Single source of truth for all interfaces and constants:
   - `on-context-tag`: batch turns, flush when `context_tag` is called.
   - `on-demand`: only when the user runs `/pruner now`.
   - `agent-message`: batch turns, flush when the agent sends a final text-only response (or when the agent loop ends).
-  - `agentic-auto`: the LLM decides when to prune by calling the `context_prune` tool, guided by `AGENTIC_AUTO_SYSTEM_PROMPT`.
+  - `agentic-auto`: the LLM decides when to prune by calling the `context_prune` tool; no `agent_end` safety-net flush.
 - **`PRUNE_ON_MODES`** — `{ value, label }` array for interactive selectors.
 - **`ContextPruneConfig`** — `{ enabled, summarizerModel, pruneOn }` stored in `~/.pi/agent/context-prune/settings.json`.
 - **`SummarizerStats`** — cumulative token/cost stats: `{ totalInputTokens, totalOutputTokens, totalCost, callCount }`. Persisted via `pi.appendEntry(CUSTOM_TYPE_STATS, ...)`.

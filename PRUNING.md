@@ -444,7 +444,7 @@ The insight is simple: **batch many tool turns, then prune once**. Everything be
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  agent-message MODE — BATCH THEN PRUNE (RECOMMENDED)                    │
+│  agent-message MODE — BATCH THEN PRUNE (CONSERVATIVE)                   │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐    │
@@ -533,8 +533,9 @@ graph LR
 | Mode | Cache Busts per 5 Turns | Context Reclaimed | Recommended for |
 |---|---|---|---|
 | `every-turn` | 5 | Immediate | Debugging only |
-| `agent-message` | 1 | After batch | **Default** — best balance |
+| `agent-message` | 1 | After batch | Conservative deterministic end-of-run pruning |
 | `on-context-tag` | ~1–2 | At milestones | Save-point workflows |
+| `agentic-auto` | model-chosen | When `context_prune` is called | **Default** — best for long autonomous loops; no `agent_end` flush |
 | `on-demand` | 0–1 | When you say so | Maximum cache preservation |
 
 > **Everything before the previous pruning point stays in the prefix cache.** The cached prefix is the stable foundation; only the new suffix (recent turns since last prune) changes per request.
@@ -629,7 +630,7 @@ ACON demonstrates that **compression not only saves tokens but can improve agent
 |---|---|
 | **Context grows without bound** | Replaces raw tool outputs (~thousands of tokens) with compact summaries (~hundreds) |
 | **Signal lost in noise** | Summaries surface the key decisions and facts; raw data is demoted to on-demand query |
-| **Cache performance** | Batch-then-prune modes (`agent-message`, `on-context-tag`) minimize cache invalidation |
+| **Cache performance** | Batch-then-prune modes (`agentic-auto`, `agent-message`, `on-context-tag`) minimize cache invalidation when used sparingly |
 | **Data availability** | `context_tree_query` recovers full original outputs at any time |
 | **Empirical benefit** | SUPO, ReSum, and ACON all show summarization improves or preserves task success while reducing context length 26–54% |
 
@@ -649,11 +650,11 @@ ACON demonstrates that **compression not only saves tokens but can improve agent
 │  "I use pi-context / context_tag"                                   │
 │       └──► on-context-tag                                           │
 │                                                                     │
-│  "I want the best balance of automation, savings, and cache hits"   │
-│       └──► agent-message  ◄── DEFAULT                               │
+│  "I want deterministic end-of-run pruning"                         │
+│       └──► agent-message                                             │
 │                                                                     │
 │  "I'm running long autonomous loops"                                │
-│       └──► agentic-auto                                             │
+│       └──► agentic-auto  ◄── DEFAULT                                 │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```

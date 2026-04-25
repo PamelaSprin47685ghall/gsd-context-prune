@@ -89,9 +89,10 @@ What happens when you call context_prune:
  * - "on-context-tag" : batches up turns and flushes when the model calls context_tag
  * - "on-demand"      : only when the user runs /pruner now
  * - "agent-message"  : batches up turns and flushes when the agent sends a final text response
- *                       (a turn with no tool calls), or when the agent loop ends (default)
+ *                       (a turn with no tool calls), or when the agent loop ends
  * - "agentic-auto"   : the LLM agent decides when to prune by calling the context_prune tool;
- *                       the tool is only active in this mode and guided by prompt instructions
+ *                       this mode does not flush automatically on agent_end; the tool is
+ *                       only active in this mode and guided by prompt instructions
  */
 export type PruneOn = "every-turn" | "on-context-tag" | "on-demand" | "agent-message" | "agentic-auto";
 
@@ -121,7 +122,7 @@ export interface ContextPruneConfig {
 export const DEFAULT_CONFIG: ContextPruneConfig = {
   enabled: false,
   summarizerModel: "default",
-  pruneOn: "agent-message",
+  pruneOn: "agentic-auto",
 };
 
 // ── Captured batch ─────────────────────────────────────────────────────────

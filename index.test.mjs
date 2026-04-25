@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const indexSource = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
+const typesSource = readFileSync(new URL("./src/types.ts", import.meta.url), "utf8");
 const commandsSource = readFileSync(new URL("./src/commands.ts", import.meta.url), "utf8");
 const contextPruneToolSource = readFileSync(new URL("./src/context-prune-tool.ts", import.meta.url), "utf8");
 
@@ -28,6 +29,18 @@ test("emits structured queue/flush diagnostics and safely guards missing ui.noti
   assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-start", "pending-batches-drained"/);
   assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-end", "discarded-stale-generation"/);
   assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-end", "summary-indexed"/);
+});
+
+test("defaults to agentic-auto prune mode", () => {
+  assert.match(typesSource, /export const DEFAULT_CONFIG: ContextPruneConfig = \{[\s\S]*pruneOn: "agentic-auto"/);
+  assert.match(indexSource, /import \{ STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT, DEFAULT_CONFIG \}/);
+  assert.match(indexSource, /value: \{ \.\.\.DEFAULT_CONFIG \}/);
+});
+
+test("agent_end safety net only flushes agent-message mode, not agentic-auto", () => {
+  assert.match(indexSource, /agent_end: safety net flush for agent-message mode/);
+  assert.match(indexSource, /if \(currentConfig\.value\.pruneOn !== "agent-message"\) return/);
+  assert.doesNotMatch(indexSource, /pruneOn !== "agent-message" && currentConfig\.value\.pruneOn !== "agentic-auto"/);
 });
 
 test("awaits flush completion for manual and agentic tool triggers", () => {
