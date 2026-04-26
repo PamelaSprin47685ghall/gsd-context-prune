@@ -24,9 +24,23 @@ export function calculateUsageTokens(usage: unknown): number | undefined {
   return tokens > 0 ? tokens : undefined;
 }
 
-export function getProactiveCompactUsage(message: Record<string, any>, contextWindow: number): ProactiveCompactUsage | undefined {
+export function getProactiveCompactUsage(
+  message: Record<string, any>,
+  contextWindow: number,
+  sessionUsage?: Record<string, unknown>,
+): ProactiveCompactUsage | undefined {
   if (message?.role !== "assistant") return undefined;
   if (message.stopReason === "aborted" || message.stopReason === "error") return undefined;
+
+  const sessionTokens = finitePositiveNumber(sessionUsage?.tokens);
+  const sessionContextWindow = finitePositiveNumber(sessionUsage?.contextWindow) ?? finitePositiveNumber(contextWindow);
+  if (sessionTokens && sessionContextWindow) {
+    return {
+      tokens: sessionTokens,
+      contextWindow: sessionContextWindow,
+      ratio: sessionTokens / sessionContextWindow,
+    };
+  }
 
   const tokens = calculateUsageTokens(message.usage);
   if (!tokens || contextWindow <= 0) return undefined;

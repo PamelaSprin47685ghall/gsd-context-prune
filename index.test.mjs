@@ -78,14 +78,17 @@ test("branch rewriter is the only context projection path", () => {
   assert.doesNotMatch(indexSource, /pruneMessages|deliverAs: "steer"/);
 });
 
-test("proactive compact triggers from turn_end at projected two-thirds usage", () => {
+test("proactive compact triggers from turn_end at projected two-thirds usage without requiring sidecar replacements", () => {
   assert.match(indexSource, /getProactiveCompactUsage/);
   assert.match(indexSource, /shouldProactivelyCompact/);
   assert.match(indexSource, /let proactiveCompactInFlight = false/);
+  assert.match(indexSource, /const currentContextUsage = ctx\.getContextUsage\?\.\(\)/);
+  assert.match(indexSource, /getProactiveCompactUsage\(event\.message, contextWindow\(ctx\), currentContextUsage\)/);
   assert.match(indexSource, /pendingCompactResetReason = "proactive-threshold"/);
   assert.match(indexSource, /await maybeProactiveCompact\(event, ctx\)/);
   assert.match(indexSource, /ctx\.compact\(\{/);
   assert.match(indexSource, /projected-context-threshold/);
+  assert.doesNotMatch(indexSource, /const maybeProactiveCompact[\s\S]*branchRewriter\.getReplacementCount\(\) === 0\) return[\s\S]*const shouldResumeInterruptedToolTurn/);
 });
 
 test("proactive compact resumes interrupted tool turns with a visible custom message", () => {

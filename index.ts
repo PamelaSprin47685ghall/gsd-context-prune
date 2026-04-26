@@ -218,9 +218,9 @@ export default function (pi: ExtensionAPI) {
 
   const maybeProactiveCompact = async (event: any, ctx: any): Promise<void> => {
     if (proactiveCompactInFlight) return;
-    if (branchRewriter.getReplacementCount() === 0) return;
 
-    const usage = getProactiveCompactUsage(event.message, contextWindow(ctx));
+    const currentContextUsage = ctx.getContextUsage?.();
+    const usage = getProactiveCompactUsage(event.message, contextWindow(ctx), currentContextUsage);
     if (!shouldProactivelyCompact(usage)) return;
 
     const shouldResumeInterruptedToolTurn = Boolean(event.toolResults && event.toolResults.length > 0);
