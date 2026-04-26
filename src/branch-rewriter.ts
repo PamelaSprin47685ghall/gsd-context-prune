@@ -127,46 +127,23 @@ export class BranchRewriter {
   projectForCompaction(messages: AgentMessage[]): AgentMessage[] {
     if (this.records.length === 0) return messages;
 
-    const insertedReplacementIds = new Set<string>();
     const projected: AgentMessage[] = [];
-
-    const insertSummary = (replacement: RewriteRecord) => {
-      if (insertedReplacementIds.has(replacement.id)) return;
-      projected.push(toSummaryMessage(replacement));
-      insertedReplacementIds.add(replacement.id);
-    };
 
     for (const message of messages) {
       if (message?.role === "toolResult") {
-        const replacement = this.replacementByToolCallId.get(message.toolCallId);
-        if (replacement) {
-          insertSummary(replacement);
-          continue;
-        }
+        if (this.replacementByToolCallId.has(message.toolCallId)) continue;
         projected.push(message);
         continue;
       }
 
       if (message?.role === "assistant" && Array.isArray(message.content)) {
-        const remainingContent = [];
-        const replacements: RewriteRecord[] = [];
+        const remainingContent = message.content.filter((block: ToolCallBlock) => {
+          if (block?.type !== "toolCall") return true;
+          return !this.replacementByToolCallId.has(getToolCallBlockId(block) ?? "");
+        });
 
-        for (const block of message.content) {
-          if (block?.type === "toolCall") {
-            const replacement = this.replacementByToolCallId.get(getToolCallBlockId(block) ?? "");
-            if (replacement) {
-              replacements.push(replacement);
-              continue;
-            }
-          }
-          remainingContent.push(block);
-        }
-
-        if (replacements.length > 0) {
-          for (const replacement of replacements) insertSummary(replacement);
-          if (remainingContent.length > 0) projected.push({ ...message, content: remainingContent });
-          continue;
-        }
+        if (remainingContent.length > 0) projected.push({ ...message, content: remainingContent });
+        continue;
       }
 
       projected.push(message);
