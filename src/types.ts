@@ -33,6 +33,9 @@ export const STATUS_WIDGET_ID = "context-prune";
 /** Name of the context_prune tool (injected only when agentic-auto mode is active) */
 export const CONTEXT_PRUNE_TOOL_NAME = "context_prune";
 
+/** Visible custom message that resumes the LLM after proactive compaction interrupts a tool-result turn. */
+export const CUSTOM_TYPE_PROACTIVE_RESUME = "context-prune-proactive-resume";
+
 /** System prompt injected when agentic-auto mode is active */
 export const AGENTIC_AUTO_SYSTEM_PROMPT = `[Context Prune — Agentic Auto Mode]
 You have access to the context_prune tool. Use it to summarize and compact preceding tool-call results from context.

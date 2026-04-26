@@ -14,7 +14,7 @@ import { BranchRewriter } from "./src/branch-rewriter.js";
 import { registerQueryTool } from "./src/query-tool.js";
 import { registerCommands, pruneStatusText } from "./src/commands.js";
 import type { ContextPruneConfig, CapturedBatch, RewriteEntryData } from "./src/types.js";
-import { STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT, DEFAULT_CONFIG } from "./src/types.js";
+import { STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT, DEFAULT_CONFIG, CUSTOM_TYPE_PROACTIVE_RESUME } from "./src/types.js";
 import { StatsAccumulator } from "./src/stats.js";
 import { registerContextPruneTool } from "./src/context-prune-tool.js";
 import { getProactiveCompactUsage, shouldProactivelyCompact } from "./src/proactive-compact.js";
@@ -223,6 +223,7 @@ export default function (pi: ExtensionAPI) {
     const usage = getProactiveCompactUsage(event.message, contextWindow(ctx));
     if (!shouldProactivelyCompact(usage)) return;
 
+    const shouldResumeInterruptedToolTurn = Boolean(event.toolResults && event.toolResults.length > 0);
     proactiveCompactInFlight = true;
     pendingCompactResetReason = "proactive-threshold";
 
@@ -232,6 +233,7 @@ export default function (pi: ExtensionAPI) {
       contextWindow: usage.contextWindow,
       percent: (usage.ratio * 100).toFixed(2),
       replacementCount: branchRewriter.getReplacementCount(),
+      resumeAfterCompact: shouldResumeInterruptedToolTurn ? "yes" : "no",
     });
 
     await new Promise<void>((resolve) => {
@@ -240,7 +242,26 @@ export default function (pi: ExtensionAPI) {
         onComplete: () => {
           logFlushDiagnostic(ctx, "compact-end", "projected-context-compacted", "turn_end", {
             turnIndex: event.turnIndex,
+            resumeAfterCompact: shouldResumeInterruptedToolTurn ? "yes" : "no",
           });
+
+          if (shouldResumeInterruptedToolTurn) {
+            pi.sendMessage({
+              customType: CUSTOM_TYPE_PROACTIVE_RESUME,
+              content: "Pruner proactively compacted the projected context after a tool-result turn exceeded 66.66% context usage. Continue the interrupted agent loop from this compacted state; do not ask the user for confirmation unless the original task requires it.",
+              display: true,
+              details: {
+                turnIndex: event.turnIndex,
+                contextTokens: usage.tokens,
+                contextWindow: usage.contextWindow,
+                percent: Number((usage.ratio * 100).toFixed(2)),
+              },
+            }, { triggerTurn: true });
+            logFlushDiagnostic(ctx, "compact-resume", "visible-message-triggered", "turn_end", {
+              turnIndex: event.turnIndex,
+            });
+          }
+
           resolve();
         },
         onError: (error: Error) => {

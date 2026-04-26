@@ -39,7 +39,7 @@ test("emits structured sidecar diagnostics and safely guards missing ui.notify",
 
 test("defaults to agentic-auto prune mode", () => {
   assert.match(typesSource, /export const DEFAULT_CONFIG: ContextPruneConfig = \{[\s\S]*pruneOn: "agentic-auto"/);
-  assert.match(indexSource, /import \{ STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT, DEFAULT_CONFIG \}/);
+  assert.match(indexSource, /import \{[^}]*STATUS_WIDGET_ID[^}]*CONTEXT_PRUNE_TOOL_NAME[^}]*AGENTIC_AUTO_SYSTEM_PROMPT[^}]*DEFAULT_CONFIG[^}]*\}/);
   assert.match(indexSource, /value: \{ \.\.\.DEFAULT_CONFIG \}/);
 });
 
@@ -86,6 +86,15 @@ test("proactive compact triggers from turn_end at projected two-thirds usage", (
   assert.match(indexSource, /await maybeProactiveCompact\(event, ctx\)/);
   assert.match(indexSource, /ctx\.compact\(\{/);
   assert.match(indexSource, /projected-context-threshold/);
+});
+
+test("proactive compact resumes interrupted tool turns with a visible custom message", () => {
+  assert.match(typesSource, /export const CUSTOM_TYPE_PROACTIVE_RESUME = "context-prune-proactive-resume"/);
+  assert.match(indexSource, /shouldResumeInterruptedToolTurn = Boolean\(event\.toolResults && event\.toolResults\.length > 0\)/);
+  assert.match(indexSource, /customType: CUSTOM_TYPE_PROACTIVE_RESUME/);
+  assert.match(indexSource, /display: true/);
+  assert.match(indexSource, /triggerTurn: true/);
+  assert.match(indexSource, /compact-resume/);
 });
 
 test("tree browser reads sidecar rewrite entries as pruned summaries", () => {
