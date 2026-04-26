@@ -20,6 +20,8 @@ test("schedules sidecar flushes and invalidates stale queue generations across s
 
   assert.match(indexSource, /resetPendingBatches\(ctx, "session-start"\)/);
   assert.match(indexSource, /resetPendingBatches\(ctx, "session-tree"\)/);
+  assert.match(indexSource, /resetPendingBatches\(ctx, "session-switch"\)/);
+  assert.match(indexSource, /resetPendingBatches\(ctx, "session-fork"\)/);
 });
 
 test("emits structured sidecar diagnostics and safely guards missing ui.notify", () => {

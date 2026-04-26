@@ -70,10 +70,11 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus(STATUS_WIDGET_ID, statusText());
   };
 
-  const resetPendingBatches = (ctx: any, reason: "session-start" | "session-tree") => {
+  const resetPendingBatches = (ctx: any, reason: string) => {
     pendingGeneration += 1;
     const droppedPendingBatches = pendingBatches.length;
     pendingBatches.length = 0;
+    flushRequestedWhileRunning = false;
 
     logFlushDiagnostic(ctx, "queue-reset", "pending-generation-advanced", reason, {
       pendingGeneration,
@@ -223,6 +224,22 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_tree", async (_event, ctx) => {
     resetPendingBatches(ctx, "session-tree");
+    indexer.reconstructFromSession(ctx);
+    branchRewriter.reconstructFromSession(ctx);
+    statsAccum.reconstructFromSession(ctx);
+    setCurrentStatus(ctx);
+  });
+
+  pi.on("session_switch", async (_event, ctx) => {
+    resetPendingBatches(ctx, "session-switch");
+    indexer.reconstructFromSession(ctx);
+    branchRewriter.reconstructFromSession(ctx);
+    statsAccum.reconstructFromSession(ctx);
+    setCurrentStatus(ctx);
+  });
+
+  pi.on("session_fork", async (_event, ctx) => {
+    resetPendingBatches(ctx, "session-fork");
     indexer.reconstructFromSession(ctx);
     branchRewriter.reconstructFromSession(ctx);
     statsAccum.reconstructFromSession(ctx);
