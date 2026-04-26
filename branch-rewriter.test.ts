@@ -49,6 +49,59 @@ describe("BranchRewriter", () => {
     expect(projected[3]).toMatchObject({ role: "toolResult", toolCallId: "call-3" });
   });
 
+  test("projects compact input by replacing the whole covered tool-call branch", () => {
+    const rewriter = new BranchRewriter();
+    rewriter.addReplacement(replacement, { appendEntry() {} } as any);
+
+    const projected = rewriter.projectForCompaction(messages());
+
+    expect(projected).toHaveLength(3);
+    expect(projected[0]).toMatchObject({ role: "user" });
+    expect(projected[1]).toMatchObject({
+      role: "custom",
+      customType: CUSTOM_TYPE_SUMMARY,
+      content: replacement.summaryText,
+    });
+    expect(projected[2]).toMatchObject({ role: "toolResult", toolCallId: "call-3" });
+    expect(projected.some((message) => message.role === "assistant")).toBe(false);
+    expect(projected.some((message) => message.toolCallId === "call-1" || message.toolCallId === "call-2")).toBe(false);
+  });
+
+  test("keeps uncovered assistant content when compacting covered tool calls", () => {
+    const rewriter = new BranchRewriter();
+    rewriter.addReplacement(replacement, { appendEntry() {} } as any);
+
+    const projected = rewriter.projectForCompaction([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will inspect this." },
+          { type: "toolCall", id: "call-1" },
+          { type: "toolCall", id: "call-9" },
+        ],
+      },
+    ]);
+
+    expect(projected).toHaveLength(2);
+    expect(projected[0]).toMatchObject({ role: "custom", content: replacement.summaryText });
+    expect(projected[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will inspect this." },
+        { type: "toolCall", id: "call-9" },
+      ],
+    });
+  });
+
+  test("detects replacement coverage in assistant and tool-result messages", () => {
+    const rewriter = new BranchRewriter();
+    rewriter.addReplacement(replacement, { appendEntry() {} } as any);
+
+    expect(rewriter.hasReplacementInMessage({ role: "assistant", content: [{ type: "toolCall", id: "call-1" }] })).toBe(true);
+    expect(rewriter.hasReplacementInMessage({ role: "toolResult", toolCallId: "call-2" })).toBe(true);
+    expect(rewriter.hasReplacementInMessage({ role: "assistant", content: [{ type: "toolCall", id: "call-9" }] })).toBe(false);
+  });
+
   test("persists replacement metadata and reconstructs it from session entries", () => {
     const appended: Array<{ customType: string; data: RewriteEntryData }> = [];
     const first = new BranchRewriter();

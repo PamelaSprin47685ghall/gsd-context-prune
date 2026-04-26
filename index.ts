@@ -395,38 +395,56 @@ export default function (pi: ExtensionAPI) {
     void flushPending(ctx, "agent-end-safety-net");
   });
 
-  pi.on("session_before_compact", async (event, _ctx) => {
-    if (!currentConfig.value.enabled) return undefined;
-    const { preparation } = event;
+  const messageFromBranchEntry = (entry: any): any | undefined => {
+    if (entry?.type === "message") return entry.message;
+    if (entry?.type === "custom_message") {
+      return {
+        role: "custom",
+        customType: entry.customType,
+        content: entry.content,
+        display: entry.display,
+        details: entry.details,
+        timestamp: entry.timestamp,
+      };
+    }
+    return undefined;
+  };
 
-    const replaceInList = (messages: any[]) => {
-      const insertedSummaryIds = new Set<string>();
-      for (let i = 0; i < messages.length; i++) {
-        const msg = messages[i];
-        if (msg?.role === "toolResult") {
-          const replacement = branchRewriter.getReplacementForToolCallId(msg.toolCallId);
-          if (replacement) {
-            if (!insertedSummaryIds.has(replacement.id)) {
-              messages[i] = branchRewriter.toSummaryMessage(replacement);
-              insertedSummaryIds.add(replacement.id);
-            } else {
-              // Already inserted this summary for a previous tool result in this batch.
-              // Remove this redundant result.
-              messages.splice(i, 1);
-              i--;
-            }
-          }
-        }
-      }
-    };
+  const projectOfficialCompactPreparation = (event: any): void => {
+    const { preparation } = event;
+    const branchEntries = Array.isArray(event.branchEntries) ? event.branchEntries : [];
+
+    const firstKeptIndex = branchEntries.findIndex((entry: any) => entry?.id === preparation.firstKeptEntryId);
+    const lastCoveredIndex = branchEntries.findLastIndex((entry: any) => branchRewriter.hasReplacementInMessage(messageFromBranchEntry(entry)));
+
+    if (firstKeptIndex >= 0 && lastCoveredIndex >= firstKeptIndex) {
+      const promotedMessages = branchEntries
+        .slice(firstKeptIndex, lastCoveredIndex + 1)
+        .map(messageFromBranchEntry)
+        .filter(Boolean);
+
+      preparation.messagesToSummarize = branchRewriter.projectForCompaction([
+        ...(preparation.messagesToSummarize ?? []),
+        ...(preparation.turnPrefixMessages ?? []),
+        ...promotedMessages,
+      ]);
+      preparation.turnPrefixMessages = [];
+      preparation.isSplitTurn = false;
+      preparation.firstKeptEntryId = branchEntries[lastCoveredIndex + 1]?.id ?? `context-prune-after:${branchEntries[lastCoveredIndex]?.id ?? "leaf"}`;
+      return;
+    }
 
     if (preparation.messagesToSummarize) {
-      replaceInList(preparation.messagesToSummarize);
+      preparation.messagesToSummarize = branchRewriter.projectForCompaction(preparation.messagesToSummarize);
     }
     if (preparation.turnPrefixMessages) {
-      replaceInList(preparation.turnPrefixMessages);
+      preparation.turnPrefixMessages = branchRewriter.projectForCompaction(preparation.turnPrefixMessages);
     }
+  };
 
+  pi.on("session_before_compact", async (event, _ctx) => {
+    if (!currentConfig.value.enabled) return undefined;
+    projectOfficialCompactPreparation(event);
     return undefined;
   });
 

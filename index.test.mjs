@@ -78,6 +78,15 @@ test("branch rewriter is the only context projection path", () => {
   assert.doesNotMatch(indexSource, /pruneMessages|deliverAs: "steer"/);
 });
 
+test("official compact consumes the full pruned branch instead of keeping monkey-patched raw entries", () => {
+  assert.match(indexSource, /projectOfficialCompactPreparation/);
+  assert.match(indexSource, /branchRewriter\.projectForCompaction/);
+  assert.match(indexSource, /branchRewriter\.hasReplacementInMessage/);
+  assert.match(indexSource, /lastCoveredIndex >= firstKeptIndex/);
+  assert.match(indexSource, /preparation\.firstKeptEntryId = branchEntries\[lastCoveredIndex \+ 1\]\?\.id/);
+  assert.match(indexSource, /context-prune-after:/);
+});
+
 test("proactive compact triggers from turn_end at projected two-thirds usage without requiring sidecar replacements", () => {
   assert.match(indexSource, /getProactiveCompactUsage/);
   assert.match(indexSource, /shouldProactivelyCompact/);
