@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { BranchRewriter } from "./src/branch-rewriter.ts";
-import { CUSTOM_TYPE_REWRITE, CUSTOM_TYPE_SUMMARY, type RewriteEntryData } from "./src/types.ts";
+import { CUSTOM_TYPE_REWRITE, CUSTOM_TYPE_REWRITE_RESET, CUSTOM_TYPE_SUMMARY, type RewriteEntryData, type RewriteResetEntryData } from "./src/types.ts";
 
 const replacement: RewriteEntryData = {
   summaryText: "Summarized useful tool output.",
@@ -90,6 +90,60 @@ describe("BranchRewriter", () => {
       toolCallIds: replacement.toolCallIds,
     });
     expect(rewriter.getReplacementForToolCallId("missing-call")).toBeUndefined();
+  });
+
+  test("clears rewrite state and persists reset metadata after compaction", () => {
+    const appended: Array<{ customType: string; data: RewriteEntryData | RewriteResetEntryData }> = [];
+    const rewriter = new BranchRewriter();
+    rewriter.addReplacement(replacement, {
+      appendEntry(customType: string, data: RewriteEntryData | RewriteResetEntryData) {
+        appended.push({ customType, data });
+      },
+    } as any);
+
+    rewriter.resetAfterCompact({
+      appendEntry(customType: string, data: RewriteEntryData | RewriteResetEntryData) {
+        appended.push({ customType, data });
+      },
+    } as any, "session-compact");
+
+    expect(rewriter.getReplacementCount()).toBe(0);
+    expect(rewriter.getReplacementForToolCallId("call-1")).toBeUndefined();
+    expect(appended[1]).toMatchObject({
+      customType: CUSTOM_TYPE_REWRITE_RESET,
+      data: { reason: "session-compact" },
+    });
+  });
+
+  test("reconstruct drops rewrites before the latest reset marker", () => {
+    const laterReplacement: RewriteEntryData = {
+      ...replacement,
+      summaryText: "Later summary.",
+      toolCallIds: ["call-4"],
+      toolNames: ["read"],
+      turnIndex: 4,
+      timestamp: 3000,
+      completedAt: 4000,
+    };
+    const rewriter = new BranchRewriter();
+
+    rewriter.reconstructFromSession({
+      sessionManager: {
+        getBranch() {
+          return [
+            { type: "custom", customType: CUSTOM_TYPE_REWRITE, data: replacement },
+            { type: "custom", customType: CUSTOM_TYPE_REWRITE_RESET, data: { resetAt: 2500, reason: "session-compact" } },
+            { type: "custom", customType: CUSTOM_TYPE_REWRITE, data: laterReplacement },
+          ];
+        },
+      },
+    } as any);
+
+    expect(rewriter.getReplacementCount()).toBe(1);
+    expect(rewriter.getReplacementForToolCallId("call-1")).toBeUndefined();
+    expect(rewriter.getReplacementForToolCallId("call-4")).toMatchObject({
+      summaryText: laterReplacement.summaryText,
+    });
   });
 
   test("upserts duplicate replacement IDs instead of emitting duplicate summaries", () => {

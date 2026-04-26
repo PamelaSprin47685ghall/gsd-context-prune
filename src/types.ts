@@ -24,6 +24,9 @@ export const CUSTOM_TYPE_STATS = "context-prune-stats";
 /** customType for persisted sidecar summary replacements (NOT in LLM context) */
 export const CUSTOM_TYPE_REWRITE = "context-prune-rewrite";
 
+/** customType for clearing persisted sidecar rewrite replacements after official compaction */
+export const CUSTOM_TYPE_REWRITE_RESET = "context-prune-rewrite-reset";
+
 /** Footer status widget ID */
 export const STATUS_WIDGET_ID = "context-prune";
 
@@ -173,6 +176,12 @@ export interface RewriteEntryData {
   turnIndex: number;
   timestamp: number;
   completedAt: number;
+}
+
+/** Persisted marker that clears earlier sidecar branch rewrites on reconstruct. */
+export interface RewriteResetEntryData {
+  resetAt: number;
+  reason: string;
 }
 
 // ── Summarizer stats ────────────────────────────────────────────────────────

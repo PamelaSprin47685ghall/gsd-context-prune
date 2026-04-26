@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@gsd/pi-coding-agent";
-import type { RewriteEntryData, SummaryMessageDetails } from "./types.js";
-import { CUSTOM_TYPE_REWRITE, CUSTOM_TYPE_SUMMARY } from "./types.js";
+import type { RewriteEntryData, RewriteResetEntryData, SummaryMessageDetails } from "./types.js";
+import { CUSTOM_TYPE_REWRITE, CUSTOM_TYPE_REWRITE_RESET, CUSTOM_TYPE_SUMMARY } from "./types.js";
 
 type AgentMessage = Record<string, any>;
 
@@ -34,6 +34,10 @@ function isRewriteEntry(entry: any): boolean {
   return entry?.type === "custom" && entry.customType === CUSTOM_TYPE_REWRITE;
 }
 
+function isRewriteResetEntry(entry: any): boolean {
+  return entry?.type === "custom" && entry.customType === CUSTOM_TYPE_REWRITE_RESET;
+}
+
 function isRewriteData(data: unknown): data is RewriteEntryData {
   const candidate = data as Partial<RewriteEntryData> | undefined;
   return Boolean(
@@ -47,14 +51,26 @@ function isRewriteData(data: unknown): data is RewriteEntryData {
   );
 }
 
+function isRewriteResetData(data: unknown): data is RewriteResetEntryData {
+  const candidate = data as Partial<RewriteResetEntryData> | undefined;
+  return Boolean(
+    candidate &&
+    typeof candidate.resetAt === "number" &&
+    typeof candidate.reason === "string",
+  );
+}
+
 export class BranchRewriter {
   private records: RewriteRecord[] = [];
   private replacementByToolCallId = new Map<string, RewriteRecord>();
 
   reconstructFromSession(ctx: ExtensionContext): void {
-    this.records = [];
-    this.replacementByToolCallId.clear();
+    this.clearInMemory();
     for (const entry of ctx.sessionManager.getBranch()) {
+      if (isRewriteResetEntry(entry) && isRewriteResetData((entry as any).data)) {
+        this.clearInMemory();
+        continue;
+      }
       if (!isRewriteEntry(entry) || !isRewriteData((entry as any).data)) continue;
       this.upsert((entry as any).data);
     }
@@ -63,6 +79,14 @@ export class BranchRewriter {
   addReplacement(data: RewriteEntryData, pi: ExtensionAPI): void {
     this.upsert(data);
     pi.appendEntry(CUSTOM_TYPE_REWRITE, data);
+  }
+
+  resetAfterCompact(pi: ExtensionAPI, reason: string): void {
+    this.clearInMemory();
+    pi.appendEntry(CUSTOM_TYPE_REWRITE_RESET, {
+      resetAt: Date.now(),
+      reason,
+    } satisfies RewriteResetEntryData);
   }
 
   project(messages: AgentMessage[]): AgentMessage[] {
@@ -102,6 +126,11 @@ export class BranchRewriter {
 
   toSummaryMessage(record: RewriteRecord): AgentMessage {
     return toSummaryMessage(record);
+  }
+
+  private clearInMemory(): void {
+    this.records = [];
+    this.replacementByToolCallId.clear();
   }
 
   private upsert(data: RewriteEntryData): void {

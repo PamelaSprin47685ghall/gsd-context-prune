@@ -6,8 +6,8 @@
   "type": "module",
   "scripts": {
     "build": "bun build index.ts --outdir /tmp/pi-context-prune-build --external @gsd/pi-coding-agent --external @gsd/pi-ai --external @gsd/pi-tui --external @sinclair/typebox",
-    "check": "bun test index.test.mjs branch-rewriter.test.ts && npm run build",
-    "test": "bun test index.test.mjs branch-rewriter.test.ts"
+    "check": "bun test index.test.mjs branch-rewriter.test.ts proactive-compact.test.ts && npm run build",
+    "test": "bun test index.test.mjs branch-rewriter.test.ts proactive-compact.test.ts"
   },
   "keywords": [
     "pi-package"

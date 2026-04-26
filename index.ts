@@ -17,6 +17,7 @@ import type { ContextPruneConfig, CapturedBatch, RewriteEntryData } from "./src/
 import { STATUS_WIDGET_ID, CONTEXT_PRUNE_TOOL_NAME, AGENTIC_AUTO_SYSTEM_PROMPT, DEFAULT_CONFIG } from "./src/types.js";
 import { StatsAccumulator } from "./src/stats.js";
 import { registerContextPruneTool } from "./src/context-prune-tool.js";
+import { getProactiveCompactUsage, shouldProactivelyCompact } from "./src/proactive-compact.js";
 
 const PLUGIN_NAME = "gsd-context-prune";
 
@@ -59,6 +60,8 @@ export default function (pi: ExtensionAPI) {
   let pendingGeneration = 0;
   let flushInFlight: Promise<void> | null = null;
   let flushRequestedWhileRunning = false;
+  let proactiveCompactInFlight = false;
+  let pendingCompactResetReason: string | null = null;
 
   const statusText = () => {
     if (flushInFlight) return "prune: summarizing sidecar…";
@@ -205,6 +208,55 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  const contextWindow = (ctx: any): number => {
+    const modelWindow = ctx.model?.contextWindow;
+    if (typeof modelWindow === "number" && Number.isFinite(modelWindow) && modelWindow > 0) return modelWindow;
+
+    const usageWindow = ctx.getContextUsage?.()?.contextWindow;
+    return typeof usageWindow === "number" && Number.isFinite(usageWindow) && usageWindow > 0 ? usageWindow : 0;
+  };
+
+  const maybeProactiveCompact = async (event: any, ctx: any): Promise<void> => {
+    if (proactiveCompactInFlight) return;
+    if (branchRewriter.getReplacementCount() === 0) return;
+
+    const usage = getProactiveCompactUsage(event.message, contextWindow(ctx));
+    if (!shouldProactivelyCompact(usage)) return;
+
+    proactiveCompactInFlight = true;
+    pendingCompactResetReason = "proactive-threshold";
+
+    logFlushDiagnostic(ctx, "compact-start", "projected-context-threshold", "turn_end", {
+      turnIndex: event.turnIndex,
+      contextTokens: usage.tokens,
+      contextWindow: usage.contextWindow,
+      percent: (usage.ratio * 100).toFixed(2),
+      replacementCount: branchRewriter.getReplacementCount(),
+    });
+
+    await new Promise<void>((resolve) => {
+      ctx.compact({
+        customInstructions: "Compact the extension-projected context exactly as prepared; preserve the current task state, recent user intent, and recovery handles.",
+        onComplete: () => {
+          logFlushDiagnostic(ctx, "compact-end", "projected-context-compacted", "turn_end", {
+            turnIndex: event.turnIndex,
+          });
+          resolve();
+        },
+        onError: (error: Error) => {
+          proactiveCompactInFlight = false;
+          pendingCompactResetReason = null;
+          logFlushDiagnostic(ctx, "compact-end", "projected-context-compact-failed", "turn_end", {
+            turnIndex: event.turnIndex,
+            error: error.message,
+          });
+          notify(ctx, `pruner: proactive compact failed: ${error.message}`, "warning");
+          resolve();
+        },
+      });
+    });
+  };
+
   pi.on("session_start", async (_event, ctx) => {
     resetPendingBatches(ctx, "session-start");
 
@@ -294,6 +346,8 @@ export default function (pi: ExtensionAPI) {
         }
       }
     }
+
+    await maybeProactiveCompact(event, ctx);
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
@@ -343,6 +397,21 @@ export default function (pi: ExtensionAPI) {
     }
 
     return undefined;
+  });
+
+  pi.on("session_compact", async (event, ctx) => {
+    const droppedReplacementCount = branchRewriter.getReplacementCount();
+    const resetReason = pendingCompactResetReason ?? (event.fromExtension ? "extension-compact" : "session-compact");
+    proactiveCompactInFlight = false;
+    pendingCompactResetReason = null;
+    resetPendingBatches(ctx, "session-compact");
+    branchRewriter.resetAfterCompact(pi, resetReason);
+    logFlushDiagnostic(ctx, "rewrite-reset", "official-compact-completed", "session_compact", {
+      fromExtension: event.fromExtension ? "yes" : "no",
+      droppedReplacementCount,
+      resetReason,
+    });
+    setCurrentStatus(ctx);
   });
 
   pi.on("context", async (event, _ctx) => {

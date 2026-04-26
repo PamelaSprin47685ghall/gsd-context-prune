@@ -68,10 +68,24 @@ test("context_prune and manual commands schedule sidecar work instead of reporti
 
 test("branch rewriter is the only context projection path", () => {
   assert.match(typesSource, /export const CUSTOM_TYPE_REWRITE = "context-prune-rewrite"/);
+  assert.match(typesSource, /export const CUSTOM_TYPE_REWRITE_RESET = "context-prune-rewrite-reset"/);
   assert.match(typesSource, /export interface RewriteEntryData/);
+  assert.match(typesSource, /export interface RewriteResetEntryData/);
   assert.match(indexSource, /branchRewriter\.addReplacement\(replacement, pi\)/);
   assert.match(indexSource, /return \{ messages: branchRewriter\.project\(event\.messages\) \}/);
+  assert.match(indexSource, /pi\.on\("session_compact"/);
+  assert.match(indexSource, /branchRewriter\.resetAfterCompact\(pi/);
   assert.doesNotMatch(indexSource, /pruneMessages|deliverAs: "steer"/);
+});
+
+test("proactive compact triggers from turn_end at projected two-thirds usage", () => {
+  assert.match(indexSource, /getProactiveCompactUsage/);
+  assert.match(indexSource, /shouldProactivelyCompact/);
+  assert.match(indexSource, /let proactiveCompactInFlight = false/);
+  assert.match(indexSource, /pendingCompactResetReason = "proactive-threshold"/);
+  assert.match(indexSource, /await maybeProactiveCompact\(event, ctx\)/);
+  assert.match(indexSource, /ctx\.compact\(\{/);
+  assert.match(indexSource, /projected-context-threshold/);
 });
 
 test("tree browser reads sidecar rewrite entries as pruned summaries", () => {
