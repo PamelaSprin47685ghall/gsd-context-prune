@@ -101,6 +101,14 @@ export class BranchRewriter {
     return this.records.length;
   }
 
+  getReplacementForToolCallId(toolCallId: string): RewriteRecord | undefined {
+    return this.records.find((r) => r.toolCallIds.includes(toolCallId));
+  }
+
+  toSummaryMessage(record: RewriteRecord): AgentMessage {
+    return toSummaryMessage(record);
+  }
+
   private upsert(data: RewriteEntryData): void {
     const record = { ...data, id: rewriteId(data) };
     const existingIndex = this.records.findIndex((existing) => existing.id === record.id);

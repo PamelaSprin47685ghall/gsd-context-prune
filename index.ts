@@ -255,52 +255,45 @@ export default function (pi: ExtensionAPI) {
       if (currentConfig.value.pruneOn === "agent-message") {
         void flushPending(ctx, "agent-message-text-turn");
       }
-      return;
+    } else {
+      const batch = captureBatch(event.message, event.toolResults, event.turnIndex, Date.now());
+      if (batch.toolCalls.length > 0) {
+        pendingBatches.push(batch);
+        logFlushDiagnostic(ctx, "queue-enqueue", "captured-tool-batch", "turn_end", {
+          pendingGeneration,
+          pendingCount: pendingBatches.length,
+          turnIndex: batch.turnIndex,
+          toolCallCount: batch.toolCalls.length,
+          pruneOn: currentConfig.value.pruneOn,
+        });
+
+        if (currentConfig.value.pruneOn === "every-turn") {
+          void flushPending(ctx, "every-turn");
+        } else {
+          let trigger: string;
+          switch (currentConfig.value.pruneOn) {
+            case "on-context-tag":
+              trigger = "next context_tag";
+              break;
+            case "agent-message":
+              trigger = "agent's next text response";
+              break;
+            case "agentic-auto":
+              trigger = "agent calling context_prune";
+              break;
+            default:
+              trigger = "/pruner now";
+              break;
+          }
+
+          setCurrentStatus(ctx);
+          ctx.ui.notify(
+            `pruner: ${pendingBatches.length} turn${pendingBatches.length === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
+            "info"
+          );
+        }
+      }
     }
-
-    const batch = captureBatch(
-      event.message,
-      event.toolResults,
-      event.turnIndex,
-      Date.now()
-    );
-    if (batch.toolCalls.length === 0) return;
-
-    pendingBatches.push(batch);
-    logFlushDiagnostic(ctx, "queue-enqueue", "captured-tool-batch", "turn_end", {
-      pendingGeneration,
-      pendingCount: pendingBatches.length,
-      turnIndex: batch.turnIndex,
-      toolCallCount: batch.toolCalls.length,
-      pruneOn: currentConfig.value.pruneOn,
-    });
-
-    if (currentConfig.value.pruneOn === "every-turn") {
-      void flushPending(ctx, "every-turn");
-      return;
-    }
-
-    let trigger: string;
-    switch (currentConfig.value.pruneOn) {
-      case "on-context-tag":
-        trigger = "next context_tag";
-        break;
-      case "agent-message":
-        trigger = "agent's next text response";
-        break;
-      case "agentic-auto":
-        trigger = "agent calling context_prune";
-        break;
-      default:
-        trigger = "/pruner now";
-        break;
-    }
-
-    setCurrentStatus(ctx);
-    ctx.ui.notify(
-      `pruner: ${pendingBatches.length} turn${pendingBatches.length === 1 ? "" : "s"} queued — will summarize on ${trigger}`,
-      "info"
-    );
   });
 
   pi.on("tool_execution_end", async (event, ctx) => {
@@ -317,6 +310,41 @@ export default function (pi: ExtensionAPI) {
     void flushPending(ctx, "agent-end-safety-net");
   });
 
+  pi.on("session_before_compact", async (event, _ctx) => {
+    if (!currentConfig.value.enabled) return undefined;
+    const { preparation } = event;
+
+    const replaceInList = (messages: any[]) => {
+      const insertedSummaryIds = new Set<string>();
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        if (msg?.role === "toolResult") {
+          const replacement = branchRewriter.getReplacementForToolCallId(msg.toolCallId);
+          if (replacement) {
+            if (!insertedSummaryIds.has(replacement.id)) {
+              messages[i] = branchRewriter.toSummaryMessage(replacement);
+              insertedSummaryIds.add(replacement.id);
+            } else {
+              // Already inserted this summary for a previous tool result in this batch.
+              // Remove this redundant result.
+              messages.splice(i, 1);
+              i--;
+            }
+          }
+        }
+      }
+    };
+
+    if (preparation.messagesToSummarize) {
+      replaceInList(preparation.messagesToSummarize);
+    }
+    if (preparation.turnPrefixMessages) {
+      replaceInList(preparation.turnPrefixMessages);
+    }
+
+    return undefined;
+  });
+
   pi.on("context", async (event, _ctx) => {
     if (!currentConfig.value.enabled) return undefined;
     if (branchRewriter.getReplacementCount() === 0) return undefined;
@@ -325,7 +353,13 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("before_agent_start", async (event, _ctx) => {
     if (!currentConfig.value.enabled || currentConfig.value.pruneOn !== "agentic-auto") return undefined;
-    return { systemPrompt: `${event.systemPrompt ?? ""}\n\n${AGENTIC_AUTO_SYSTEM_PROMPT}` };
+
+    const currentPrompt = event.systemPrompt ?? "";
+    if (currentPrompt.includes("[Context Prune — Agentic Auto Mode]")) {
+      return undefined; // Already injected
+    }
+
+    return { systemPrompt: `${currentPrompt}\n\n${AGENTIC_AUTO_SYSTEM_PROMPT}` };
   });
 
   registerQueryTool(pi, indexer);
