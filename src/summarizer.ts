@@ -3,6 +3,31 @@ import type { ExtensionContext } from "@gsd/pi-coding-agent";
 import type { CapturedBatch, ContextPruneConfig, SummarizeResult } from "./types.js";
 import { serializeBatchForSummarizer, serializeBatchesForSummarizer } from "./batch-capture.js";
 
+async function completeWithRetry(
+  ctx: ExtensionContext,
+  model: any,
+  payload: any,
+  options: any
+): Promise<any> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await complete(model, payload, options);
+    } catch (err: any) {
+      attempt++;
+      const isConcurrencyError = err.message?.includes("Concurrency limit exceeded");
+      const delay = Math.min(Math.pow(2, attempt) * 1000, 30000);
+
+      ctx.ui.notify(
+        `pruner: summarization attempt ${attempt} failed: ${err.message}. Retrying in ${delay / 1000}s...`,
+        isConcurrencyError ? "info" : "warning"
+      );
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 const SUMMARY_OMISSION_GUIDANCE = `Hot-context budget matters more than one-bullet-per-tool completeness.
 Summarize durable signal only: facts, decisions, failures, file paths, commands, outputs, or constraints that future reasoning may need.
 Omit low-value noise from the hot summary, such as successful no-op edits, directory listings with no finding, repeated status checks, or outputs fully superseded by later calls.
@@ -91,7 +116,8 @@ export async function summarizeBatch(
     const userMessage =
       SYSTEM_PROMPT + "\n\n<tool-call-batch>\n" + serialized + "\n</tool-call-batch>";
 
-    const response = await complete(
+    const response = await completeWithRetry(
+      ctx,
       model,
       {
         messages: [
@@ -163,7 +189,8 @@ export async function summarizeBatches(
     const userMessage =
       BATCHED_SYSTEM_PROMPT + "\n\n<tool-call-batches>\n" + serialized + "\n</tool-call-batches>";
 
-    const response = await complete(
+    const response = await completeWithRetry(
+      ctx,
       model,
       {
         messages: [

@@ -236,46 +236,56 @@ export default function (pi: ExtensionAPI) {
       resumeAfterCompact: shouldResumeInterruptedToolTurn ? "yes" : "no",
     });
 
-    await new Promise<void>((resolve) => {
-      ctx.compact({
-        customInstructions: "Compact the extension-projected context exactly as prepared; preserve the current task state, recent user intent, and recovery handles.",
-        onComplete: () => {
-          logFlushDiagnostic(ctx, "compact-end", "projected-context-compacted", "turn_end", {
-            turnIndex: event.turnIndex,
-            resumeAfterCompact: shouldResumeInterruptedToolTurn ? "yes" : "no",
-          });
-
-          if (shouldResumeInterruptedToolTurn) {
-            pi.sendMessage({
-              customType: CUSTOM_TYPE_PROACTIVE_RESUME,
-              content: "Pruner proactively compacted the projected context after a tool-result turn exceeded 66.66% context usage. Continue the interrupted agent loop from this compacted state; do not ask the user for confirmation unless the original task requires it.",
-              display: true,
-              details: {
-                turnIndex: event.turnIndex,
-                contextTokens: usage.tokens,
-                contextWindow: usage.contextWindow,
-                percent: Number((usage.ratio * 100).toFixed(2)),
-              },
-            }, { triggerTurn: true });
-            logFlushDiagnostic(ctx, "compact-resume", "visible-message-triggered", "turn_end", {
+    let attempt = 0;
+    while (true) {
+      const shouldRetry = await new Promise<boolean>((resolve) => {
+        ctx.compact({
+          customInstructions: "Compact the extension-projected context exactly as prepared; preserve the current task state, recent user intent, and recovery handles.",
+          onComplete: () => {
+            logFlushDiagnostic(ctx, "compact-end", "projected-context-compacted", "turn_end", {
               turnIndex: event.turnIndex,
+              resumeAfterCompact: shouldResumeInterruptedToolTurn ? "yes" : "no",
             });
-          }
 
-          resolve();
-        },
-        onError: (error: Error) => {
-          proactiveCompactInFlight = false;
-          pendingCompactResetReason = null;
-          logFlushDiagnostic(ctx, "compact-end", "projected-context-compact-failed", "turn_end", {
-            turnIndex: event.turnIndex,
-            error: error.message,
-          });
-          notify(ctx, `pruner: proactive compact failed: ${error.message}`, "warning");
-          resolve();
-        },
+            if (shouldResumeInterruptedToolTurn) {
+              pi.sendMessage({
+                customType: CUSTOM_TYPE_PROACTIVE_RESUME,
+                content: "Pruner proactively compacted the projected context after a tool-result turn exceeded 66.66% context usage. Continue the interrupted agent loop from this compacted state; do not ask the user for confirmation unless the original task requires it.",
+                display: true,
+                details: {
+                  turnIndex: event.turnIndex,
+                  contextTokens: usage.tokens,
+                  contextWindow: usage.contextWindow,
+                  percent: Number((usage.ratio * 100).toFixed(2)),
+                },
+              }, { triggerTurn: true });
+              logFlushDiagnostic(ctx, "compact-resume", "visible-message-triggered", "turn_end", {
+                turnIndex: event.turnIndex,
+              });
+            }
+
+            resolve(false);
+          },
+          onError: (error: Error) => {
+            attempt++;
+            const isConcurrencyError = error.message?.includes("Concurrency limit exceeded");
+            const delay = Math.min(Math.pow(2, attempt) * 1000, 30000);
+
+            logFlushDiagnostic(ctx, "compact-retry", "projected-context-compact-failed", "turn_end", {
+              turnIndex: event.turnIndex,
+              attempt,
+              error: error.message,
+            });
+
+            notify(ctx, `pruner: proactive compact attempt ${attempt} failed: ${error.message}. Retrying in ${delay / 1000}s...`, isConcurrencyError ? "info" : "warning");
+
+            setTimeout(() => resolve(true), delay);
+          },
+        });
       });
-    });
+
+      if (!shouldRetry) break;
+    }
   };
 
   pi.on("session_start", async (_event, ctx) => {
