@@ -49,9 +49,11 @@ function isRewriteData(data: unknown): data is RewriteEntryData {
 
 export class BranchRewriter {
   private records: RewriteRecord[] = [];
+  private replacementByToolCallId = new Map<string, RewriteRecord>();
 
   reconstructFromSession(ctx: ExtensionContext): void {
     this.records = [];
+    this.replacementByToolCallId.clear();
     for (const entry of ctx.sessionManager.getBranch()) {
       if (!isRewriteEntry(entry) || !isRewriteData((entry as any).data)) continue;
       this.upsert((entry as any).data);
@@ -66,13 +68,6 @@ export class BranchRewriter {
   project(messages: AgentMessage[]): AgentMessage[] {
     if (this.records.length === 0) return messages;
 
-    const replacementByToolCallId = new Map<string, RewriteRecord>();
-    for (const record of this.records) {
-      for (const toolCallId of record.toolCallIds) {
-        replacementByToolCallId.set(toolCallId, record);
-      }
-    }
-
     const insertedReplacementIds = new Set<string>();
     const projected: AgentMessage[] = [];
 
@@ -82,7 +77,7 @@ export class BranchRewriter {
         continue;
       }
 
-      const replacement = replacementByToolCallId.get(message.toolCallId);
+      const replacement = this.replacementByToolCallId.get(message.toolCallId);
       if (!replacement) {
         projected.push(message);
         continue;
@@ -102,7 +97,7 @@ export class BranchRewriter {
   }
 
   getReplacementForToolCallId(toolCallId: string): RewriteRecord | undefined {
-    return this.records.find((r) => r.toolCallIds.includes(toolCallId));
+    return this.replacementByToolCallId.get(toolCallId);
   }
 
   toSummaryMessage(record: RewriteRecord): AgentMessage {
@@ -113,9 +108,16 @@ export class BranchRewriter {
     const record = { ...data, id: rewriteId(data) };
     const existingIndex = this.records.findIndex((existing) => existing.id === record.id);
     if (existingIndex >= 0) {
+      for (const toolCallId of this.records[existingIndex].toolCallIds) {
+        this.replacementByToolCallId.delete(toolCallId);
+      }
       this.records[existingIndex] = record;
-      return;
+    } else {
+      this.records.push(record);
     }
-    this.records.push(record);
+
+    for (const toolCallId of record.toolCallIds) {
+      this.replacementByToolCallId.set(toolCallId, record);
+    }
   }
 }

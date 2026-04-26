@@ -81,6 +81,17 @@ describe("BranchRewriter", () => {
     });
   });
 
+  test("looks up replacements by tool call id", () => {
+    const rewriter = new BranchRewriter();
+    rewriter.addReplacement(replacement, { appendEntry() {} } as any);
+
+    expect(rewriter.getReplacementForToolCallId("call-1")).toMatchObject({
+      summaryText: replacement.summaryText,
+      toolCallIds: replacement.toolCallIds,
+    });
+    expect(rewriter.getReplacementForToolCallId("missing-call")).toBeUndefined();
+  });
+
   test("upserts duplicate replacement IDs instead of emitting duplicate summaries", () => {
     const rewriter = new BranchRewriter();
     rewriter.addReplacement({ ...replacement, summaryText: "first" }, { appendEntry() {} } as any);
