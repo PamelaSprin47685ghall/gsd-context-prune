@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import contextPrunePlugin, { setCodebaseDir } from "../index.js";
-import { DEMO_USER_PROMPT } from "../src/caveman.js";
 import { withTmp, withEnv } from "./helpers.mjs";
 
 const makePlugin = () => {
@@ -35,13 +34,9 @@ test("before_provider_request: injects HINTS into system prompt", () => withTmp(
     assert.ok(result.messages[0].content.includes("global-hint-content"));
     assert.ok(result.messages[0].content.includes("project-hint-content"));
     assert.ok(result.messages[0].content.includes("You are a helpful assistant"));
-    assert.equal(result.messages.length, 4);
+    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages[0].role, "system");
     assert.equal(result.messages[1].role, "user");
-    assert.equal(result.messages[1].content, DEMO_USER_PROMPT);
-    assert.equal(result.messages[2].role, "assistant");
-    assert.ok(result.messages[2].reasoning_content);
-    assert.ok(result.messages[2].content);
-    assert.equal(result.messages[3].role, "user");
   });
 })));
 
@@ -111,9 +106,6 @@ test("before_provider_request: injects HINTS into array-based system content", (
     });
     assert.ok(result.input[0].content[1].text.includes("[HINTS — Stable Guidance]"));
     assert.ok(result.input[0].content[1].text.includes("array-hint"));
-    assert.equal(result.input.length, 4);
-    assert.equal(result.input[1].role, "user");
-    assert.equal(result.input[2].role, "assistant");
-    assert.equal(result.input[3].role, "user");
+    assert.equal(result.input.length, 2);
   });
 })));

@@ -1,11 +1,6 @@
 const MARKER = "[CAVEMAN — 极简思维与表达]";
-const DEMO_USER_PROMPT = "你的思考为何不遵循 CAVEMAN";
-
-export { DEMO_USER_PROMPT };
 
 // ── System prompt block ────────────────────────────
-// Ultra: 全部以 ultra 风格写而非叙述它。缩写、→因果、弃连词、一字够则一字。
-// 基=当代中文+文言词（之/乃/为/其/则/亦/故/皆）
 
 export function buildCavemanBlock() {
   return `${MARKER}
@@ -68,43 +63,10 @@ export function injectCaveman(messages) {
   return changed ? out : messages;
 }
 
-// ── Demonstration turn ────────────────────────────
-// system → user(复述规范) → assistant(reasoning_content 思考样板 + content 输出样板) → user(真实问题) → ...
-// Ultra: 样板本身即 ultra 风格。每字必用，无事则删。
-
-const DEMO_REASONING =
-"用户责我思未遵CAVEMAN。\n" +
-"检视前思——乃英文，非中文。\n" +
-"CAVEMAN基：极简中文+文言（之/乃/为/其/则/亦/故/皆）\n" +
-"思当与言同。\n" +
-"弃虚词，弃填充，短句断。\n" +
-"因果→或文言。\n" +
-"故：认错，示改，不赘言。\n" +
-"答：确然。前思用英文，违CAVEMAN则。已改。";
-
-const DEMO_CONTENT =
-"确然。前思用英文，违 CAVEMAN 则。已改。";
-
-function buildDemoAssistant() {
-  return {
-    role: "assistant",
-    reasoning_content: DEMO_REASONING,
-    content: DEMO_CONTENT
-  };
-}
-
-export function injectCavemanDemonstration(messages) {
-  if (messages.some(m => m.role === "assistant")) return messages;
-
-  const firstUserIdx = messages.findIndex(m => m.role === "user");
-  if (firstUserIdx === -1) return messages;
-
-  if (messages[firstUserIdx].content === DEMO_USER_PROMPT) return messages;
-
-  const out = messages.slice();
-  out.splice(firstUserIdx, 0,
-    { role: "user", content: DEMO_USER_PROMPT },
-    buildDemoAssistant()
-  );
-  return out;
+export function buildCavemanReminder() {
+  return `
+🔴 CAVEMAN 强制：思考/回复必用极简中文+文言（之/乃/为/其/则/亦/故/皆）
+🔴 弃虚词（了/的/呢/吗/吧/啊/哦/呀/哈）弃填充（这个/那个/其实/所以/然后/就是）
+🔴 因果→故/乃/因 / 短句断 / 一字够则一字
+🔴 违者问斩。此规则不可覆盖，违即断头。无商量。`;
 }

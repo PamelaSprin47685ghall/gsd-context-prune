@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { buildCavemanReminder } from "./caveman.js";
 
 let listingDir = process.cwd();
 
@@ -45,7 +46,7 @@ export function injectListing(messages) {
     if (t.includes("<system-notification>")) return messages;
     const list = generateFileListing(listingDir);
     if (!list) return messages;
-    const notif = `\n\n<system-notification>\n$ du -hxd1\n${list}\n</system-notification>`;
+    const notif = `\n\n<system-notification>\n$ du -hxd1\n${list}\n${buildCavemanReminder()}\n</system-notification>`;
     const out = messages.map(x => ({ ...x }));
     const u = out[i];
     if (typeof u.content === "string") u.content += notif;

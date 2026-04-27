@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildCavemanBlock, injectCaveman, injectCavemanDemonstration, DEMO_USER_PROMPT } from "../src/caveman.js";
+import { buildCavemanBlock, injectCaveman, buildCavemanReminder } from "../src/caveman.js";
 import { withTmp, withEnv } from "./helpers.mjs";
 import contextPrunePlugin, { setCodebaseDir } from "../index.js";
 
@@ -102,121 +102,12 @@ test("before_provider_request: caveman + HINTS both present", () => withTmp(dir 
   });
 }));
 
-// ── Demonstration turn tests ────────────────────────
+// ── Reminder tests ──────────────────────────────────
 
-test("injectCavemanDemonstration: injects demo turn before first user message", () => {
-  const messages = [
-    { role: "system", content: "sys" },
-    { role: "user", content: "real question" }
-  ];
-  const result = injectCavemanDemonstration(messages);
-  assert.equal(result.length, 4);
-  assert.equal(result[0].role, "system");
-  assert.equal(result[1].role, "user");
-  assert.equal(result[1].content, DEMO_USER_PROMPT);
-  assert.equal(result[2].role, "assistant");
-  assert.ok(result[2].reasoning_content);
-  assert.ok(result[2].content);
-  assert.equal(result[3].role, "user");
-  assert.equal(result[3].content, "real question");
+test("buildCavemanReminder: returns formatted reminder", () => {
+  const reminder = buildCavemanReminder();
+  assert.ok(reminder.includes("CAVEMAN"));
+  assert.ok(reminder.includes("极简中文"));
+  assert.ok(reminder.includes("问斩"));
+  assert.ok(reminder.includes("断头"));
 });
-
-test("injectCavemanDemonstration: skips when assistant already exists (non-first-turn)", () => {
-  const messages = [
-    { role: "system", content: "sys" },
-    { role: "user", content: "q" },
-    { role: "assistant", content: "a" },
-    { role: "user", content: "q2" }
-  ];
-  const result = injectCavemanDemonstration(messages);
-  assert.equal(result, messages);
-});
-
-test("injectCavemanDemonstration: idempotent — skips when demo already injected", () => {
-  const messages = [
-    { role: "system", content: "sys" },
-    { role: "user", content: DEMO_USER_PROMPT },
-    { role: "assistant", content: "demo", reasoning_content: "thinking demo" },
-    { role: "user", content: "real q" }
-  ];
-  const result = injectCavemanDemonstration(messages);
-  assert.equal(result, messages);
-});
-
-test("injectCavemanDemonstration: skips when no user message", () => {
-  const messages = [
-    { role: "system", content: "sys" }
-  ];
-  const result = injectCavemanDemonstration(messages);
-  assert.equal(result, messages);
-});
-
-test("before_provider_request: demo turn is injected in fresh conversations", () => withTmp(dir => {
-  const events = makePlugin();
-  events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-  withEnv("GSD_HOME", dir, () => {
-    const result = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "sys" },
-          { role: "user", content: "first question" }
-        ]
-      }
-    });
-    // 4 messages: system, demo user, demo assistant, original user
-    assert.equal(result.messages.length, 4);
-    assert.equal(result.messages[1].content, DEMO_USER_PROMPT);
-    assert.equal(result.messages[2].role, "assistant");
-    assert.ok(result.messages[2].reasoning_content);
-    assert.ok(result.messages[2].content);
-    assert.equal(result.messages[3].content, "first question");
-  });
-}));
-
-test("before_provider_request: demo not injected on subsequent turns", () => withTmp(dir => {
-  const events = makePlugin();
-  events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-  withEnv("GSD_HOME", dir, () => {
-    // First turn — demo injected
-    const r1 = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "sys" },
-          { role: "user", content: "msg 1" }
-        ]
-      }
-    });
-    // Second turn — simulate next request (replace last user msg + add assistant)
-    const r2Input = [
-      ...r1.messages.slice(0, -1),
-      { role: "assistant", content: "earlier response" },
-      { role: "user", content: "msg 2" }
-    ];
-    const r2 = events.before_provider_request({
-      payload: { model: "test", messages: r2Input }
-    });
-    // No additional injection — same length as input
-    assert.equal(r2.messages.length, r2Input.length);
-  });
-}));
-
-test("before_provider_request: demo assistant has reasoning_content and content", () => withTmp(dir => {
-  const events = makePlugin();
-  events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-  withEnv("GSD_HOME", dir, () => {
-    const result = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "sys" },
-          { role: "user", content: "hi" }
-        ]
-      }
-    });
-    const demo = result.messages[2];
-    assert.ok(demo.reasoning_content.includes("CAVEMAN"));
-    assert.ok(demo.reasoning_content.includes("极简"));
-    assert.ok(demo.reasoning_content.includes("违CAVEMAN则"));
-    assert.ok(demo.content.includes("确然"));
-    assert.ok(demo.content.includes("已改"));
-  });
-}));
