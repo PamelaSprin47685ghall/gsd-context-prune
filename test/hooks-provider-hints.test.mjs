@@ -34,7 +34,13 @@ test("before_provider_request: injects HINTS into system prompt", () => withTmp(
     assert.ok(result.messages[0].content.includes("global-hint-content"));
     assert.ok(result.messages[0].content.includes("project-hint-content"));
     assert.ok(result.messages[0].content.includes("You are a helpful assistant"));
-    assert.equal(result.messages.length, 2);
+    assert.equal(result.messages.length, 4);
+    assert.equal(result.messages[1].role, "user");
+    assert.equal(result.messages[1].content, "请你复述 CAVEMAN 规范，并在思考和输出时严格遵守。");
+    assert.equal(result.messages[2].role, "assistant");
+    assert.ok(result.messages[2].reasoning_content);
+    assert.ok(result.messages[2].content);
+    assert.equal(result.messages[3].role, "user");
   });
 })));
 
@@ -102,8 +108,11 @@ test("before_provider_request: injects HINTS into array-based system content", (
         ]
       }
     });
-    assert.ok(result.input[0].content[0].text.includes("[HINTS — Stable Guidance]"));
-    assert.ok(result.input[0].content[0].text.includes("array-hint"));
-    assert.equal(result.input.length, 2);
+    assert.ok(result.input[0].content[1].text.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.input[0].content[1].text.includes("array-hint"));
+    assert.equal(result.input.length, 4);
+    assert.equal(result.input[1].role, "user");
+    assert.equal(result.input[2].role, "assistant");
+    assert.equal(result.input[3].role, "user");
   });
 })));

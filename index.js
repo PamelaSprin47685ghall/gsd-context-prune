@@ -1,4 +1,5 @@
 import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
+import { buildCavemanBlock, injectCaveman, injectCavemanDemonstration } from "./src/caveman.js";
 import { stripCodebase, stripMessages } from "./src/codebase.js";
 import { setCodebaseDir, getCodebaseDir, generateFileListing, injectListing } from "./src/listing.js";
 import { stabilizeIds } from "./src/ids.js";
@@ -10,7 +11,7 @@ import {
 } from "./src/summary.js";
 import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 
-export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock };
+export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock, injectCaveman, injectCavemanDemonstration };
 
 function processPayload(payload, messages, isResponses) {
   const stripped = stripMessages(messages);
@@ -71,6 +72,8 @@ export default function contextPrunePlugin(pi) {
 
     let modified = processPayload(p, messages, isResponses);
     modified = injectHints(modified, getCodebaseDir());
+    modified = injectCaveman(modified);
+    modified = injectCavemanDemonstration(modified);
 
     let result = p;
     if (modified !== messages) {
