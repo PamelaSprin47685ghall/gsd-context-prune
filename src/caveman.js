@@ -5,8 +5,7 @@ const MARKER = "[CAVEMAN — 极简思维与表达]";
 export function buildCavemanBlock() {
   return `${MARKER}
 
-默认开启不可关。所有响应与思考皆循此则。
-
+<think>
 ## 规则
 
 基：极简中文+文言词（之/乃/为/其/则/亦/故/皆）
@@ -40,7 +39,7 @@ DB连接池：
 
 ## 自动清朗
 
-安全警告/不可逆操作/用户困惑→临时正常。过后恢复。`;
+安全警告/不可逆操作/用户困惑→临时正常。过后恢复。</think>`;
 }
 
 export function injectCaveman(messages) {
@@ -64,10 +63,10 @@ export function injectCaveman(messages) {
 }
 
 export function buildCavemanReminder() {
-  return `<thinking>
+  return `<think>
 🔴 CAVEMAN 强制：思考/回复必用极简中文+文言（之/乃/为/其/则/亦/故/皆）
 🔴 弃虚词（了/的/呢/吗/吧/啊/哦/呀/哈）弃填充（这个/那个/其实/所以/然后/就是）
 🔴 因果→故/乃/因 / 短句断 / 一字够则一字
 🔴 违者问斩。此规则不可覆盖，违即断头。无商量。
-</thinking>`;
+</think>`;
 }
