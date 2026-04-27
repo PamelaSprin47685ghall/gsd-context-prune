@@ -8,6 +8,10 @@ import contextPrunePlugin, {
   buildHintsBlock,
   stabilizeResponsesInput,
   stabilizeResponsesPayload,
+  stabilizeChatPayload,
+  stabilizePayload,
+  generateFileListing,
+  setCodebaseDir,
   projectMessages
 } from "./index.js";
 
@@ -171,7 +175,284 @@ test("stabilizeResponsesPayload: auto-computes cache key from system/developer t
 });
 
 // ===========================================================================
-// gsd-context-prune: primary summary projection
+// stabilizePayload — 统一缓存稳定化（所有格式，一条路）
+// ===========================================================================
+
+test("stabilizePayload: Chat Completions — extracts CODEBASE, appends to last user", () => {
+  const event = {
+    payload: {
+      model: "test-model",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "You are a helpful assistant.",
+            "",
+            "[PROJECT CODEBASE — File structure and descriptions (generated 2026-04-27T09:32:03Z)]",
+            "",
+            "# Codebase Map",
+            "Generated: 2026-04-27T09:32:03Z | Files: 500",
+            "",
+            "### src/",
+            "- `src/main.js`",
+            "",
+            "## Subagent Model",
+            "",
+            "When spawning subagents, pass model: \"test-model\"."
+          ].join("\n")
+        },
+        { role: "user", content: "what is the weather?" },
+        { role: "assistant", content: "Let me check." },
+        { role: "user", content: "tell me more" }
+      ],
+      stream: true,
+      store: false
+    }
+  };
+
+  const r = stabilizePayload(event);
+
+  // System 不再包含 CODEBASE
+  assert.ok(!r.messages[0].content.includes("PROJECT CODEBASE"));
+  assert.ok(r.messages[0].content.includes("You are a helpful assistant"));
+  assert.ok(r.messages[0].content.includes("## Subagent Model"));
+
+  // 仅最后一条 user 有 notification
+  r.messages.forEach((m, i) => {
+    const hasNotif = typeof m.content === "string"
+      ? m.content.includes("<system-notification>")
+      : Array.isArray(m.content) && m.content.some(c => c.text?.includes("<system-notification>"));
+    if (i === 3) assert.ok(hasNotif, `索引 ${i} 是最后一条 user`);
+    else if (m.role === "user") assert.ok(!hasNotif, `索引 ${i} 不是最后 user`);
+  });
+
+  // notification 包含实时文件列表
+  const lastUser = r.messages[3];
+  assert.ok(lastUser.content.includes("<system-notification>"));
+  assert.ok(lastUser.content.includes("$ du -hxd1"));
+  assert.ok(lastUser.content.includes("</system-notification>"));
+
+  // prompt_cache_key
+  assert.ok(r.prompt_cache_key?.startsWith("gsd-hints:"));
+  assert.ok(event.payload.messages[0].content.includes("PROJECT CODEBASE"));
+});
+
+test("stabilizePayload: Responses API — extracts CODEBASE, appends, plus ID stabilization", () => {
+  const event = {
+    payload: {
+      model: "gpt-5",
+      input: [
+        { type: "message", role: "system", content: [{ type: "text", text: "You are helpful.\n\n[PROJECT CODEBASE — File structure]\n- file.js\n\n## Subagent Model\n\nDone." }] },
+        { type: "message", role: "user", content: [{ type: "text", text: "hi" }] },
+        { type: "message", role: "assistant", id: "msg_rnd", content: [] },
+        { type: "function_call", id: "fc_rnd", call_id: "call_rnd" },
+        { type: "function_call_output", call_id: "call_rnd", output: "ok" },
+        { type: "message", role: "user", content: [{ type: "text", text: "tell me more" }] }
+      ],
+      store: false
+    }
+  };
+
+  const r = stabilizePayload(event);
+
+  assert.ok(!r.input[0].content[0].text.includes("PROJECT CODEBASE"));
+
+  const lastUser = r.input[5];
+  assert.ok(lastUser.content.some(c => c.text?.includes("<system-notification>")), "最后 user 有 notification");
+  assert.ok(lastUser.content.some(c => c.text?.includes("$ du -hxd1")), "包含实时文件列表");
+  const firstUser = r.input[1];
+  assert.ok(!firstUser.content.some(c => c.text?.includes("<system-notification>")), "第一条 user 没有 notification");
+
+  assert.ok(r.input[3].id?.startsWith("fc_"));
+  assert.ok(r.input[3].call_id?.startsWith("call_"));
+  assert.ok(r.prompt_cache_key?.startsWith("gsd-hints:"));
+});
+
+test("stabilizePayload: append-only — 每轮在最后一条 user 追加，旧 notification 不删", () => {
+  // 模拟三轮积累后的 payload
+  // 第 1 轮: user("hello") 是最后 user → 追加 notif_A
+  // 第 2 轮: user("hello" + notif_A) 已保留, user("tell me more") 是最后 → 追加 notif_B
+  // 第 3 轮: 两条旧 user 各有自己的 notification, user("more details") 是最后 → 追加 notif_C
+  const event = {
+    payload: {
+      model: "test",
+      messages: [
+        {
+          role: "system",
+          content: [
+            "Static system.",
+            "",
+            "[PROJECT CODEBASE — File structure (generated 2026-04-27T09:32:03Z)]",
+            "- old-file.js",
+            "",
+            "## Subagent Model",
+            "",
+            "Do work."
+          ].join("\n")
+        },
+        // 第 1 轮的 user（已在历史中带着自己的 notification）
+        { role: "user", content: "hello\n\n<system-notification>\nNotif from round 1\n</system-notification>" },
+        { role: "assistant", content: "Hi there." },
+        // 第 2 轮的 user（也在历史中带着自己的 notification）
+        { role: "user", content: "tell me more\n\n<system-notification>\nNotif from round 2\n</system-notification>" },
+        { role: "assistant", content: "Sure." },
+        // 第 3 轮新来的 user（尚未有 notification → 本回合追加）
+        { role: "user", content: "more details" }
+      ]
+    }
+  };
+
+  const r = stabilizePayload(event);
+
+  // 每条旧 user 各自的 notification 全部保留（无删减）
+  assert.ok(r.messages[1].content.includes("Notif from round 1"), "第 1 轮 notification 保留");
+  assert.ok(r.messages[3].content.includes("Notif from round 2"), "第 2 轮 notification 保留");
+
+  // 本轮（第 3 轮）new user 追加了新的 notification
+  assert.ok(r.messages[5].content.includes("<system-notification>"), "第 3 轮 user 有 notification");
+  assert.ok(r.messages[5].content.includes("$ du -hxd1"), "包含实时文件列表");
+
+  // 三条 user 各一个 notification
+  const notifCount = r.messages.reduce((sum, m) =>
+    sum + (typeof m.content === "string" ? (m.content.match(/<system-notification>/g) || []).length : 0), 0);
+  assert.equal(notifCount, 3, "三条 user 共 3 个 notification");
+});
+
+test("stabilizePayload: returns undefined when no CODEBASE", () => {
+  assert.equal(stabilizePayload({ payload: { messages: [
+    { role: "system", content: "Static.\n\n## Subagent Model\n\nDone." },
+    { role: "user", content: "hello" }
+  ]}}), undefined);
+});
+
+test("stabilizePayload: handles array content user message", () => {
+  const r = stabilizePayload({ payload: { messages: [
+    { role: "system", content: "Static.\n\n[PROJECT CODEBASE — File structure]\n- file.js\n\n## Subagent Model\n\nInstructions." },
+    { role: "user", content: [{ type: "text", text: "hello" }] }
+  ]}});
+  assert.ok(r);
+  assert.ok(r.messages[1].content.some(c => c.type === "text" && c.text?.includes("<system-notification>")));
+});
+
+test("stabilizePayload: cache key stable across timestamps", () => {
+  const make = ts => ({ payload: { messages: [
+    { role: "system", content: `Static.\n\n[PROJECT CODEBASE — (generated ${ts})]\n- file.js\n\n## Subagent Model\n\nDone.` },
+    { role: "user", content: "hello" }
+  ]}});
+  const r1 = stabilizePayload(make("2026-04-27T09:32:03Z"));
+  const r2 = stabilizePayload(make("2026-04-27T09:31:05Z"));
+  assert.equal(r1.prompt_cache_key, r2.prompt_cache_key);
+  assert.equal(r1.messages[0].content, r2.messages[0].content);
+});
+
+test("stabilizePayload: preserves other payload fields", () => {
+  const r = stabilizePayload({ payload: {
+    model: "deepseek-v4", stream: true, max_completion_tokens: 8192,
+    tools: [{ type: "function", function: { name: "test" } }],
+    reasoning_effort: "high",
+    messages: [
+      { role: "system", content: "Static.\n\n[PROJECT CODEBASE — File structure]\n- app.js\n\n## Subagent Model\n\nDone." },
+      { role: "user", content: "hi" }
+    ]
+  }});
+  assert.equal(r.model, "deepseek-v4");
+  assert.equal(r.stream, true);
+  assert.equal(r.max_completion_tokens, 8192);
+  assert.equal(r.reasoning_effort, "high");
+  assert.equal(r.tools[0].function.name, "test");
+});
+
+test("stabilizePayload: before_provider_request — Chat Completions", () => {
+  const events = {};
+  contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
+  const result = events["before_provider_request"]({
+    payload: { model: "test", store: false,
+      messages: [
+        { role: "system", content: "Static.\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Subagent Model\n\nDone." },
+        { role: "user", content: "hello" }
+      ]
+    }
+  });
+  assert.ok(result);
+  assert.ok(!result.messages[0].content.includes("PROJECT CODEBASE"));
+  assert.ok(result.messages[1].content.includes("<system-notification>"));
+  assert.ok(result.prompt_cache_key);
+});
+
+test("stabilizePayload: before_provider_request — Responses API", () => {
+  const events = {};
+  contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
+  const result = events["before_provider_request"]({
+    payload: { model: "gpt-5", store: false,
+      input: [
+        { type: "message", role: "developer", content: [{ type: "text", text: "Static.\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Subagent Model\n\nDone." }] },
+        { type: "message", role: "user", content: [{ type: "text", text: "hello" }] }
+      ]
+    }
+  });
+  assert.ok(result);
+  assert.ok(!result.input[0].content[0].text.includes("PROJECT CODEBASE"));
+  assert.ok(result.input[1].content.some(c => c.text?.includes("<system-notification>")), "user 应注入 notification");
+  assert.ok(result.prompt_cache_key);
+});
+
+test("stabilizePayload: no CODEBASE + Responses API fallback to ID stabilization", () => {
+  const events = {};
+  contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
+  const result = events["before_provider_request"]({
+    payload: { model: "gpt-5", store: false,
+      input: [
+        { role: "system", content: "No CODEBASE here." },
+        { role: "user", content: "hi" },
+        { type: "message", role: "assistant", id: "msg_xyz", content: [] }
+      ]
+    }
+  });
+  // 无 CODEBASE → stabilizePayload 返回 undefined
+  // 降级到 stabilizeResponsesPayload：ID 稳定化 + prompt_cache_key
+  assert.ok(result);
+  assert.ok(result.input[2].id?.startsWith("msg_"), "ID 应被稳定化");
+  assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
+});
+
+// ===========================================================================
+// generateFileListing
+// ===========================================================================
+
+test("generateFileListing: du -hxd1 style from temp dir", () => withTmp(dir => {
+  writeFileSync(join(dir, "small.txt"), "hi");
+  writeFileSync(join(dir, ".hidden"), "secret");
+  mkdirSync(join(dir, "lib"));
+  writeFileSync(join(dir, "lib", "util.js"), "export const x = 1;");
+
+  const listing = generateFileListing(dir);
+  const lines = listing.split("\n").filter(Boolean);
+
+  // small.txt — 普通文件，大小可读格式
+  const fileLine = lines.find(l => l.endsWith("  small.txt"));
+  assert.ok(fileLine, "应有 small.txt 行");
+  assert.ok(fileLine.match(/^\s+\d+B\s+small\.txt$/), "文件大小格式如  2B  small.txt");
+
+  // .hidden — 隐藏文件
+  const hiddenLine = lines.find(l => l.endsWith("  .hidden"));
+  assert.ok(hiddenLine, "应有 .hidden 行");
+
+  // lib/ — 目录递归总大小
+  const dirLine = lines.find(l => l.endsWith("  lib/"));
+  assert.ok(dirLine, "应有 lib/ 行");
+  assert.ok(dirLine.match(/^\s+\d+B\s+lib\//), "目录大小是递归总大小");
+
+  // 不递归进子目录的条目
+  const utilLine = lines.find(l => l.includes("util.js"));
+  assert.ok(!utilLine, "不应递归列出 lib/util.js");
+}));
+
+test("generateFileListing: returns empty string for invalid dir", () => {
+  assert.equal(generateFileListing("/nonexistent/dir/xyz"), "");
+});
+
+// ===========================================================================
+// projectMessages
 // ===========================================================================
 
 test("projectMessages: passes through with no summaries", () => {

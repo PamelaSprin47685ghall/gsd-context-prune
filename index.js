@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 
 // ===========================================================================
 // gsd-context-prune — 双层上下文修剪 (Primary + Global Summary)
@@ -259,23 +260,205 @@ ${textMessages}
 }
 
 // ===========================================================================
-// Payload 稳定（仍保留，无关对话结构）
+// Payload 稳定化 — 一条路走遍所有 provider 格式
 // ===========================================================================
+
+/**
+ * findDynamicRanges — 在文本中查找所有动态内容段。
+ * 当前已知：CODEBASE 地图（[PROJECT CODEBASE 到下一个段落边界之间）。
+ * 可扩展：后续在此添加其他动态段。
+ */
+function findDynamicRanges(content) {
+  const ranges = [];
+  const CODEBASE_START = "[PROJECT CODEBASE —";
+  const BOUNDARIES = [
+    "## Subagent Model", "## GSD Skill Preferences", "# Tools", "## Tools"
+  ];
+  let pos = 0;
+  while (pos < content.length) {
+    const start = content.indexOf(CODEBASE_START, pos);
+    if (start === -1) break;
+    let end = -1;
+    for (const b of BOUNDARIES) {
+      const idx = content.indexOf(b, start + CODEBASE_START.length);
+      if (idx !== -1 && (end === -1 || idx < end)) end = idx;
+    }
+    if (end === -1 || end <= start) break;
+    ranges.push({ start, end, text: content.slice(start, end) });
+    pos = end;
+  }
+  return ranges;
+}
+
+/** 从文本中剥离动态段，返回 { stable, dynamic } 或 null */
+function stripDynamicRanges(text) {
+  const ranges = findDynamicRanges(text);
+  if (ranges.length === 0) return null;
+  let dynamic = "", stable = text;
+  const sorted = [...ranges].sort((a, b) => b.start - a.start);
+  for (const r of sorted) {
+    dynamic = r.text.trim() + "\n\n" + dynamic;
+    stable = stable.slice(0, r.start) + stable.slice(r.end);
+  }
+  return { stable, dynamic: dynamic.trim() };
+}
+
+function getItemText(item) {
+  if (typeof item.content === "string") return item.content;
+  if (Array.isArray(item.content)) return item.content.map(c => c.text || "").join("\n");
+  return "";
+}
+
+/** 生成实时文件列表，mimic du -hxd1 语义 */
+export function generateFileListing(dir) {
+  function humanSize(bytes) {
+    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(1) + "G";
+    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + "M";
+    if (bytes >= 1024) return (bytes / 1024).toFixed(1) + "K";
+    return bytes + "B";
+  }
+
+  function dirTotal(p) {
+    let total = 0;
+    try {
+      const items = fs.readdirSync(p, { withFileTypes: true });
+      for (const item of items) {
+        const fp = path.join(p, item.name);
+        try {
+          const st = fs.statSync(fp);
+          total += item.isDirectory() || st.isDirectory() ? dirTotal(fp) : st.size;
+        } catch {}
+      }
+    } catch {}
+    return total;
+  }
+
+  try {
+    const items = fs.readdirSync(dir, { withFileTypes: true });
+    const lines = items.map(item => {
+      const fp = path.join(dir, item.name);
+      let size;
+      try {
+        const st = fs.statSync(fp);
+        size = item.isDirectory() || st.isDirectory() ? dirTotal(fp) : st.size;
+      } catch { size = 0; }
+      const suffix = item.isDirectory() ? "/" : "";
+      return `${humanSize(size).padStart(8)}  ${item.name}${suffix}`;
+    });
+    return lines.join("\n");
+  } catch { return ""; }
+}
+
+/** 可替代的 CODEBASE 扫描目录（默认 process.cwd()，测试中可设为临时目录） */
+let codebaseDir = process.cwd();
+export function setCodebaseDir(dir) { codebaseDir = dir; }
+
+function isRole(item, role) {
+  return item.role === role || (item.type === "message" && item.role === role);
+}
+
+/** 统一入口：任何 provider 的消息数组都归一为同一条路
+ *
+ * 核心语义（append-only，每轮在最后一条 user 追加）：
+ *
+ *   第 1 轮: sys → user("1" + notif_1)
+ *   第 2 轮: sys → user("1" + notif_1) → ai → user("2" + notif_2)
+ *   第 3 轮: sys → user("1" + notif_1) → ai → user("2" + notif_2) → ai → user("3" + notif_3)
+ *
+ *   每条 user 消息在它曾是最后一条的那个回合拿到自己的 notification，
+ *   后续永远不会被删。system prompt 始终静态。
+ */
+export function stabilizePayload(event) {
+  const p = event.payload;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return undefined;
+
+  // 支持所有格式：messages (Chat/Anthropic)、input (Responses)
+  const arr = Array.isArray(p.messages) ? p.messages : Array.isArray(p.input) ? p.input : null;
+  if (!arr || arr.length < 2) return undefined;
+  const isResponses = !Array.isArray(p.messages) && Array.isArray(p.input);
+
+  // 浅克隆
+  const cloned = arr.map(item => {
+    if (typeof item !== "object" || item === null) return item;
+    const c = { ...item };
+    if (Array.isArray(item.content)) c.content = item.content.map(cc => ({ ...cc }));
+    return c;
+  });
+
+  // 1. 剥离 system/developer 中的动态段（支持 string 和 array content）
+  let dynamicText = "", modified = false;
+  for (const item of cloned) {
+    if (!isRole(item, "system") && !isRole(item, "developer")) continue;
+
+    if (typeof item.content === "string") {
+      const r = stripDynamicRanges(item.content);
+      if (!r) continue;
+      item.content = r.stable;
+      dynamicText += (dynamicText ? "\n\n" : "") + r.dynamic;
+      modified = true;
+    } else if (Array.isArray(item.content)) {
+      let blockChanged = false;
+      const newContent = item.content.map(block => {
+        if (block.type === "text" && typeof block.text === "string") {
+          const r = stripDynamicRanges(block.text);
+          if (r) {
+            dynamicText += (dynamicText ? "\n\n" : "") + r.dynamic;
+            blockChanged = true;
+            return { ...block, text: r.stable };
+          }
+        }
+        return block;
+      });
+      if (!blockChanged) continue;
+      item.content = newContent;
+      modified = true;
+    }
+  }
+  if (!modified) return undefined;
+
+  // 2. 找到最后一条 user 消息，追加 notification（append-only，不删旧的）
+  let lastUser = null;
+  for (let i = cloned.length - 1; i >= 0; i--) {
+    if (isRole(cloned[i], "user")) { lastUser = cloned[i]; break; }
+  }
+  if (!lastUser) return undefined;
+
+  // 用自己的实时实现替换 GSD 的 CODEBASE（经常过期）
+  const freshCodebase = generateFileListing(codebaseDir);
+  const notifContent = freshCodebase
+    ? `$ du -hxd1\n${freshCodebase}`
+    : dynamicText.trim(); // fallback：无法读目录时用原始内容
+  const notif = `\n\n<system-notification>\n${notifContent}\n</system-notification>`;
+  if (typeof lastUser.content === "string") lastUser.content += notif;
+  else if (Array.isArray(lastUser.content)) lastUser.content.push({ type: "text", text: notif.trim() });
+
+  // 3. 稳定缓存键
+  const sysText = cloned.filter(item => isRole(item, "system") || isRole(item, "developer"))
+    .map(item => getItemText(item)).join("\n");
+  const cacheKey = process.env.GSD_HINTS_PROMPT_CACHE_KEY?.trim()
+    || `gsd-hints:${createHash("sha256").update(sysText).digest("hex").slice(0, 24)}`;
+
+  // 4. 组装结果
+  const result = isResponses
+    ? { ...p, input: cloned, prompt_cache_key: cacheKey }
+    : { ...p, messages: cloned, prompt_cache_key: cacheKey };
+
+  // 5. Responses API 额外：ID 稳定化
+  if (isResponses) {
+    const { input, changed } = stabilizeResponsesInput(result.input);
+    if (changed) result.input = input;
+  }
+  return result;
+}
 
 export function stabilizeResponsesInput(input) {
   const callMap = new Map();
   let m = 0, f = 0, changed = false;
-
-  const getCallId = (id) => {
-    if (!callMap.has(id)) callMap.set(id, `call_${callMap.size}`);
-    return callMap.get(id);
-  };
-
+  const getCallId = id => { if (!callMap.has(id)) callMap.set(id, `call_${callMap.size}`); return callMap.get(id); };
   const next = input.map(i => {
     if (!i || typeof i !== "object") return i;
     let out = i;
     const upd = (k, v) => { if (out[k] !== v) { if (out === i) out = { ...i }; out[k] = v; changed = true; } };
-
     if (i.type === "message" && i.role === "assistant" && typeof i.id === "string") upd("id", `msg_${m++}`);
     if (i.type === "function_call") {
       if (typeof i.call_id === "string") upd("call_id", getCallId(i.call_id));
@@ -287,24 +470,26 @@ export function stabilizeResponsesInput(input) {
   return { input: next, changed };
 }
 
+// 兼容导出
+export function stabilizeChatPayload(event) { return stabilizePayload(event); }
 export function stabilizeResponsesPayload(event) {
+  const r = stabilizePayload(event);
+  if (r) return r;
+  // 回退：无 CODEBASE 时纯 ID 稳定
   const p = event.payload;
   if (!p || typeof p !== "object" || Array.isArray(p)) return undefined;
-  if (!["openai-responses", "azure-openai-responses"].includes(event.model?.api || "") && !(Array.isArray(p.input) && ("prompt_cache_key" in p || "store" in p))) return undefined;
-
+  if (!Array.isArray(p.input)) return undefined;
   let changed = false;
   const next = { ...p };
-
   const key = process.env.GSD_HINTS_PROMPT_CACHE_KEY?.trim() || (() => {
     if (!Array.isArray(next.input)) return undefined;
-    const text = next.input.filter(i => i && typeof i === "object" && (i.role === "system" || i.role === "developer"))
-      .map(i => typeof i.content === "string" ? i.content : Array.isArray(i.content) ? i.content.map((b) => b?.text || "").join("\n") : "")
-      .filter(Boolean).join("\n\n");
-    return text ? `gsd-hints:${createHash("sha256").update(text).digest("hex").slice(0, 24)}` : undefined;
+    return `gsd-hints:${createHash("sha256").update(
+      next.input.filter(i => i && typeof i === "object" && (i.role === "system" || i.role === "developer"))
+        .map(i => typeof i.content === "string" ? i.content : Array.isArray(i.content) ? i.content.map(b => b?.text || "").join("\n") : "")
+        .filter(Boolean).join("\n\n")
+    ).digest("hex").slice(0, 24)}`;
   })();
-
   if (key && next.prompt_cache_key !== key) { next.prompt_cache_key = key; changed = true; }
-
   if (Array.isArray(next.input)) {
     const { input, changed: c } = stabilizeResponsesInput(next.input);
     if (c) { next.input = input; changed = true; }
@@ -374,10 +559,15 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
-  // ---- 仅稳定 Payload，不涉及对话结构 ----
+  // ---- 整个 provider 层就一行：稳定化 → 缓存命中 ----
   pi.on("before_provider_request", (e) => {
-    const r = stabilizeResponsesPayload(e);
+    const r = stabilizePayload(e);
     if (r) return r;
+    // 无 CODEBASE 的 Responses API 回退：纯 ID 稳定
+    if (Array.isArray(e.payload?.input)) {
+      const r2 = stabilizeResponsesPayload(e);
+      if (r2) return r2;
+    }
   });
 
   // ---- tools & commands ----
