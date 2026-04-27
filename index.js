@@ -203,9 +203,8 @@ export function projectMessages(messages) {
       }
       if (pos !== -1) {
         keep[pos] = {
-          id: `primary-sum-${s.latestId}`, role: "custom",
-          customType: "context-prune-primary",
-          content: `【初级精简摘要】\n${s.text}`, display: true
+          ...keep[pos],
+          content: `【初级精简摘要】\n${s.text}`
         };
       }
       result = keep;
@@ -224,9 +223,8 @@ export function projectMessages(messages) {
         if (m.id && ids.has(m.id)) {
           if (!inserted && afterSys !== -1) {
             kept.splice(afterSys, 0, {
-              id: `global-sum-${s.timestamp}`, role: "custom",
-              customType: "context-prune-global",
-              content: `【高级精简：世界线坍缩】\n${s.text}`, display: true
+              id: `global-sum-${s.timestamp}`, role: "assistant",
+              content: `【高级精简：世界线坍缩】\n${s.text}`
             });
             afterSys++;
             inserted = true;

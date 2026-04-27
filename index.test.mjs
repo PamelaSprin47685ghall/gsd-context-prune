@@ -397,8 +397,8 @@ test("integration: session_start restores summaries, context projects them", () 
   // call1 在折叠集内但不是 latest → content 零字节
   assert.equal(result.messages[1].toolCallId, "call1");
   assert.equal(result.messages[1].content, "");
-  // call2 是 latest → 替换为 summary
-  assert.equal(result.messages[2].customType, "context-prune-primary");
+  // call2 是 latest → content 替换为摘要（role 保持 toolResult，时序不乱）
+  assert.equal(result.messages[2].toolCallId, "call2");
   assert.ok(result.messages[2].content.includes("test summary"));
   // call3 不在折叠集 → 不变
   assert.equal(result.messages[3].toolCallId, "call3");
