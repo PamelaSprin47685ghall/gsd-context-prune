@@ -1,13 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { createHash } from "node:crypto";
 
 // ==========================================================================
 // gsd-context-prune
 //
 // Pipeline — 每一步做一件事，顺序执行，无 fallback：
-//   stripCodebase → injectListing → computeCacheKey → stabilizeIds → projectSummaries
+//   stripCodebase → injectListing → stabilizeIds → projectSummaries
 // ==========================================================================
 
 const read = p => { try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }};
@@ -153,25 +152,6 @@ function injectListing(messages) {
   }
   return messages;
 }
-
-// ── Step 3: 缓存键 ─────────────────────────────────────────────────────────
-
-function sysText(messages) {
-  return messages
-    .filter(m => m.role === "system" || m.role === "developer")
-    .map(m => typeof m.content === "string"
-      ? m.content
-      : Array.isArray(m.content) ? m.content.map(c => c.text || "").join("\n") : "")
-    .join("\n");
-}
-
-function computeCacheKey(messages) {
-  const env = process.env.GSD_HINTS_PROMPT_CACHE_KEY;
-  if (env?.trim()) return env.trim();
-  const t = sysText(messages);
-  return t ? `gsd-hints:${createHash("sha256").update(t).digest("hex").slice(0, 24)}` : "";
-}
-
 // ── Step 4: ID 剥离（Completions / Responses API）─────────────────────────
 
 /** 剥离 assistant message 的 id 和 function_call 的 id/call_id，
@@ -342,7 +322,7 @@ async function triggerGlobalSummary(ctx, pi, projectedMessages) {
 
 /**
  * 统一入口：将任意格式的 payload 归一处理。
- * pipeline: stripCodebase → injectListing → computeCacheKey → stabilizeIds
+ * pipeline: stripCodebase → injectListing → stabilizeIds → projectSummaries
  */
 export function stabilizePayload(event) {
   const p = event.payload;
@@ -354,16 +334,13 @@ export function stabilizePayload(event) {
 
   let m = stripMessages(messages);
   m = injectListing(m);
-  const key = computeCacheKey(m);
 
   if (isResponses) {
     const input = stabilizeIds(m);
-    return { ...p, input, prompt_cache_key: key };
+    return { ...p, input };
   }
-  return { ...p, messages: m, prompt_cache_key: key };
+  return { ...p, messages: m };
 }
-
-// ── Plugin ─────────────────────────────────────────────────────────────────
 
 export default function contextPrunePlugin(pi) {
   pi.on("session_start", (event, ctx) => {
@@ -383,12 +360,12 @@ export default function contextPrunePlugin(pi) {
     );
   });
 
-  // context hook：CODEBASE 剥离 → HINTS 注入 → 文件列表注入 → 摘要投影
+  // context hook：文件列表注入 → 摘要投影
+  // 注意：event.messages 是 AgentMessage[]（仅 user/assistant/toolResult），不含 system prompt。
+  // CODEBASE 剥离和 HINTS 注入在 before_provider_request 中处理（payload 含完整 system prompt）。
   pi.on("context", (event) => {
     const messages = event.messages || [];
-    const stripped = stripMessages(messages);
-    const withHints = injectHints(stripped);
-    const withListing = injectListing(withHints);
+    const withListing = injectListing(messages);
     return { messages: projectMessages(withListing) };
   });
 
@@ -420,7 +397,9 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
-  // before_provider_request：缓存键 + ID 稳定化
+  // before_provider_request：CODEBASE 剥离 → HINTS 注入 → ID 稳定化
+  // 此处 payload 包含完整 system prompt（由 provider 拼入），可以安全操作 system/developer 消息。
+  // 注意：必须始终返回 result（即使未变更），否则 PI 框架丢弃返回值使用原始 payload。
   pi.on("before_provider_request", (e) => {
     const p = e.payload;
     if (!p || typeof p !== "object") return;
@@ -429,16 +408,23 @@ export default function contextPrunePlugin(pi) {
     const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
     if (!messages) return;
 
-    const key = computeCacheKey(stripMessages(messages));
-    let result = key ? { ...p, prompt_cache_key: key } : p;
-    let changed = result !== p;
+    // 剥离 CODEBASE + 注入 HINTS（幂等：已有标记则跳过）
+    let modified = stripMessages(messages);
+    modified = injectHints(modified);
 
-    if (isResponses) {
-      const input = stabilizeIds(p.input);
-      if (input !== p.input) { result = { ...result, input }; changed = true; }
+    let result = p;
+    if (modified !== messages) {
+      result = isResponses ? { ...result, input: modified } : { ...result, messages: modified };
     }
 
-    return changed ? result : undefined;
+    if (isResponses) {
+      const input = stabilizeIds(modified);
+      if (input !== modified) {
+        result = { ...result, input };
+      }
+    }
+
+    return result;
   });
 
   pi.registerTool({
