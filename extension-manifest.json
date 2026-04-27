@@ -8,6 +8,6 @@
     "platform": ">=2.29.0"
   },
   "provides": {
-    "hooks": ["before_agent_start", "before_provider_request", "session_start", "context", "turn_end"]
+    "hooks": ["before_provider_request", "session_start", "context", "turn_end"]
   }
 }

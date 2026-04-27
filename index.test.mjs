@@ -446,3 +446,121 @@ test("integration: no global summary on error stop", () => {
 
   assert.ok(!notes.some(n => n.includes("高级精简")));
 });
+
+// ===========================================================================
+// HINTS injection via context hook
+// ===========================================================================
+
+test("context hook: injects HINTS into system prompt", () => withTmp(pDir => withTmp(gDir => {
+  mkdirSync(join(pDir, ".gsd"));
+  writeFileSync(join(gDir, "HINTS.md"), "global-hint-content");
+  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "project-hint-content");
+  withEnv("GSD_HOME", gDir, () => {
+    setCodebaseDir(pDir);
+    const events = {};
+    contextPrunePlugin({
+      on: (e, cb) => { events[e] = cb; },
+      registerTool: () => {}, registerCommand: () => {}
+    });
+
+    events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+    const result = events["context"]({
+      messages: [
+        { role: "system", content: "You are a helpful assistant.\n\n## Subagent Model\n\nDone." },
+        { role: "user", content: "hello" }
+      ]
+    });
+
+    assert.ok(result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content.includes("global-hint-content"));
+    assert.ok(result.messages[0].content.includes("project-hint-content"));
+    assert.ok(result.messages[0].content.includes("You are a helpful assistant"));
+    assert.equal(result.messages.length, 2);
+  });
+})));
+
+test("context hook: idempotent — does not double-inject HINTS", () => withTmp(pDir => withTmp(gDir => {
+  mkdirSync(join(pDir, ".gsd"));
+  writeFileSync(join(gDir, "HINTS.md"), "persistent-hint");
+  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "project-hint-2");
+  withEnv("GSD_HOME", gDir, () => {
+    setCodebaseDir(pDir);
+    const events = {};
+    contextPrunePlugin({
+      on: (e, cb) => { events[e] = cb; },
+      registerTool: () => {}, registerCommand: () => {}
+    });
+
+    events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+    // 模拟两轮 context 调用
+    const first = events["context"]({
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "msg 1" }
+      ]
+    });
+    const second = events["context"]({
+      messages: first.messages.map((m, i) =>
+        i === first.messages.length - 1
+          ? { role: "user", content: "msg 2" }
+          : m
+      )
+    });
+
+    // HINTS 只出现一次
+    const hintsCount = (second.messages[0].content.match(/\[HINTS — Stable Guidance\]/g) || []).length;
+    assert.equal(hintsCount, 1);
+  });
+})));
+
+test("context hook: skips injection when no HINTS files exist", () => withTmp(pDir => withTmp(gDir => {
+  withEnv("GSD_HOME", gDir, () => {
+    setCodebaseDir(pDir);
+    const events = {};
+    contextPrunePlugin({
+      on: (e, cb) => { events[e] = cb; },
+      registerTool: () => {}, registerCommand: () => {}
+    });
+
+    events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+    const result = events["context"]({
+      messages: [
+        { role: "system", content: "Just system." },
+        { role: "user", content: "hi" }
+      ]
+    });
+
+    assert.ok(!result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.equal(result.messages[0].content, "Just system.");
+  });
+})));
+
+test("context hook: injects HINTS into array-based system content", () => withTmp(pDir => withTmp(gDir => {
+  mkdirSync(join(pDir, ".gsd"));
+  writeFileSync(join(gDir, "HINTS.md"), "array-hint");
+  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "arr-project");
+  withEnv("GSD_HOME", gDir, () => {
+    setCodebaseDir(pDir);
+    const events = {};
+    contextPrunePlugin({
+      on: (e, cb) => { events[e] = cb; },
+      registerTool: () => {}, registerCommand: () => {}
+    });
+
+    events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+    const result = events["context"]({
+      messages: [
+        { role: "developer", content: [{ type: "text", text: "Dev instructions." }] },
+        { role: "user", content: "hi" }
+      ]
+    });
+
+    assert.ok(result.messages[0].content[0].text.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content[0].text.includes("array-hint"));
+    assert.equal(result.messages.length, 2);
+  });
+})));

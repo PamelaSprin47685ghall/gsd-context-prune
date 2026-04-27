@@ -32,6 +32,28 @@ export function buildHintsBlock(cwd) {
     s.map(x => `## ${x.label} HINTS (${x.path})\n\n${x.content}`).join("\n\n")}`;
 }
 
+/** 在第一个 system/developer 消息头部注入 HINTS 块（幂等：已存在则不重复注入）。 */
+function injectHints(messages) {
+  const block = buildHintsBlock(listingDir);
+  if (!block) return messages;
+  let changed = false;
+  const out = messages.map(m => {
+    if (m.role !== "system" && m.role !== "developer") return m;
+    if (typeof m.content === "string") {
+      if (m.content.includes("[HINTS — Stable Guidance]")) return m;
+      changed = true;
+      return { ...m, content: block + "\n\n" + m.content };
+    }
+    if (Array.isArray(m.content)) {
+      if (m.content.some(c => c.text?.includes("[HINTS — Stable Guidance]"))) return m;
+      changed = true;
+      return { ...m, content: [{ type: "text", text: block + "\n\n" }, ...m.content] };
+    }
+    return m;
+  });
+  return changed ? out : messages;
+}
+
 // ── Step 1: CODEBASE 剥离 ─────────────────────────────────────────────────
 
 const CB_START = "[PROJECT CODEBASE —";
@@ -361,11 +383,12 @@ export default function contextPrunePlugin(pi) {
     );
   });
 
-  // context hook：CODEBASE 剥离 → 文件列表注入 → 摘要投影
+  // context hook：CODEBASE 剥离 → HINTS 注入 → 文件列表注入 → 摘要投影
   pi.on("context", (event) => {
     const messages = event.messages || [];
     const stripped = stripMessages(messages);
-    const withListing = injectListing(stripped);
+    const withHints = injectHints(stripped);
+    const withListing = injectListing(withHints);
     return { messages: projectMessages(withListing) };
   });
 
