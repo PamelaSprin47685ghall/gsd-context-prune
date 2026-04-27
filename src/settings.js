@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { readFile } from "./util.js";
 
-const read = p => { try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }};
 const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
 
 export function loadDefaultModelId() {
   try {
-    const data = JSON.parse(read(SETTINGS_PATH) || "{}");
+    const data = JSON.parse(readFile(SETTINGS_PATH) || "{}");
     return data.summarizerModelId || "default";
   } catch { return "default"; }
 }

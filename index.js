@@ -12,6 +12,13 @@ import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 
 export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock };
 
+function processPayload(payload, messages, isResponses) {
+  const stripped = stripMessages(messages);
+  const normalized = normalizeMessages(stripped, payload.reasoning_effort);
+  if (isResponses) return stabilizeIds(normalized);
+  return normalized;
+}
+
 export function stabilizePayload(event) {
   const p = event.payload;
   if (!p || typeof p !== "object" || Array.isArray(p)) return;
@@ -20,14 +27,10 @@ export function stabilizePayload(event) {
   const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
   if (!messages || messages.length < 2) return;
 
-  let m = stripMessages(messages);
+  let m = processPayload(p, messages, isResponses);
   m = injectListing(m);
-  m = normalizeMessages(m, p.reasoning_effort);
 
-  if (isResponses) {
-    const input = stabilizeIds(m);
-    return { ...p, input };
-  }
+  if (isResponses) return { ...p, input: m };
   return { ...p, messages: m };
 }
 
@@ -66,22 +69,12 @@ export default function contextPrunePlugin(pi) {
     const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
     if (!messages) return;
 
-    let modified = stripMessages(messages);
+    let modified = processPayload(p, messages, isResponses);
     modified = injectHints(modified, getCodebaseDir());
+
     let result = p;
     if (modified !== messages) {
       result = isResponses ? { ...result, input: modified } : { ...result, messages: modified };
-    }
-
-    if (isResponses) {
-      const input = stabilizeIds(modified);
-      if (input !== modified) result = { ...result, input };
-    }
-
-    const msgs = isResponses ? result.input : result.messages;
-    const normalized = normalizeMessages(msgs, p.reasoning_effort);
-    if (normalized !== msgs) {
-      result = isResponses ? { ...result, input: normalized } : { ...result, messages: normalized };
     }
     return result;
   });

@@ -142,7 +142,7 @@ export async function triggerGlobalSummary(ctx, pi, projectedMessages) {
 
 export function collectToolCall(event) {
   const content = Array.isArray(event.message?.content) ? event.message.content : [];
-  const toolCalls = content.filter(b => b.type === "toolCall") || [];
+  const toolCalls = content.filter(b => b.type === "toolCall");
   const toolResults = event.toolResults || [];
   for (const tc of toolCalls) {
     const id = tc.id || tc.toolCallId;

@@ -1,15 +1,13 @@
-import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-
-const read = p => { try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }};
+import { readFile } from "./util.js";
 
 export function loadHintSources(cwd) {
   const home = process.env.GSD_HOME || path.join(os.homedir(), ".gsd");
-  const g = read(path.join(home, "HINTS.md"));
+  const g = readFile(path.join(home, "HINTS.md"));
   const out = g ? [{ label: "Global", path: path.join(home, "HINTS.md"), content: g }] : [];
   if (cwd) {
-    const p = read(path.join(cwd, ".gsd", "HINTS.md")) || read(path.join(cwd, "HINTS.md"));
+    const p = readFile(path.join(cwd, ".gsd", "HINTS.md")) || readFile(path.join(cwd, "HINTS.md"));
     if (p) out.push({ label: "Project", path: "", content: p });
   }
   return out;

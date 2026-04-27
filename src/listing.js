@@ -49,7 +49,7 @@ export function injectListing(messages) {
     const out = messages.map(x => ({ ...x }));
     const u = out[i];
     if (typeof u.content === "string") u.content += notif;
-    else if (Array.isArray(u.content)) u.content = [...u.content, { type: "text", text: notif.trim() }];
+    else if (Array.isArray(u.content)) u.content = [...u.content, { type: "text", text: notif }];
     return out;
   }
   return messages;
