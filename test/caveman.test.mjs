@@ -215,8 +215,8 @@ test("before_provider_request: demo assistant has reasoning_content and content"
     const demo = result.messages[2];
     assert.ok(demo.reasoning_content.includes("CAVEMAN"));
     assert.ok(demo.reasoning_content.includes("极简"));
-    assert.ok(demo.reasoning_content.includes("清朗"));
-    assert.ok(demo.content.includes("CAVEMAN 规范"));
-    assert.ok(demo.content.includes("自动清朗"));
+    assert.ok(demo.reasoning_content.includes("违CAVEMAN则"));
+    assert.ok(demo.content.includes("确然"));
+    assert.ok(demo.content.includes("已改"));
   });
 }));
