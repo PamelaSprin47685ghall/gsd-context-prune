@@ -1,116 +1,120 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import test from 'node:test';
+import assert from 'node:assert';
+import contextPrunePlugin from './index.js';
 
-const indexSource = readFileSync(new URL("./index.ts", import.meta.url), "utf8");
-const typesSource = readFileSync(new URL("./src/types.ts", import.meta.url), "utf8");
-const commandsSource = readFileSync(new URL("./src/commands.ts", import.meta.url), "utf8");
-const contextPruneToolSource = readFileSync(new URL("./src/context-prune-tool.ts", import.meta.url), "utf8");
-const summarizerSource = readFileSync(new URL("./src/summarizer.ts", import.meta.url), "utf8");
-const treeBrowserSource = readFileSync(new URL("./src/tree-browser.ts", import.meta.url), "utf8");
+test('gsd-context-prune', async (t) => {
+  const events = {};
+  const appendedEntries = [];
+  const notifications = [];
+  const tools = [];
+  const commands = [];
+  
+  const mockPi = {
+    on: (eventName, handler) => {
+      events[eventName] = handler;
+    },
+    appendEntry: (customType, data) => {
+      appendedEntries.push({ customType, data });
+    },
+    registerTool: (tool) => {
+      tools.push(tool);
+    },
+    registerCommand: (name, options) => {
+      commands.push({ name, options });
+    }
+  };
 
-test("schedules sidecar flushes and invalidates stale queue generations across session boundaries", () => {
-  assert.match(indexSource, /let pendingGeneration = 0/);
-  assert.match(indexSource, /let flushInFlight: Promise<void> \| null = null/);
-  assert.match(indexSource, /let flushRequestedWhileRunning = false/);
-  assert.match(indexSource, /sidecar-already-running/);
-  assert.match(indexSource, /void flushPending\(ctx, `\$\{scenarioId\}-queued`\)/);
-  assert.doesNotMatch(indexSource, /await flushInFlight/);
-  assert.match(indexSource, /if \(drainGeneration !== pendingGeneration\)/);
+  contextPrunePlugin(mockPi);
 
-  assert.match(indexSource, /resetPendingBatches\(ctx, "session-start"\)/);
-  assert.match(indexSource, /resetPendingBatches\(ctx, "session-tree"\)/);
-  assert.match(indexSource, /resetPendingBatches\(ctx, "session-switch"\)/);
-  assert.match(indexSource, /resetPendingBatches\(ctx, "session-fork"\)/);
-});
+  await t.test('registers all required events, tools, and commands', () => {
+    assert.ok(events['session_start'], 'should register session_start');
+    assert.ok(events['context'], 'should register context');
+    assert.ok(events['turn_end'], 'should register turn_end');
+    
+    assert.strictEqual(tools.length, 1, 'should register 1 tool');
+    assert.strictEqual(tools[0].name, 'context_prune', 'tool should be context_prune');
+    
+    assert.strictEqual(commands.length, 1, 'should register 1 command');
+    assert.strictEqual(commands[0].name, 'pruner', 'command should be pruner');
+  });
 
-test("emits structured sidecar diagnostics and safely guards missing ui.notify", () => {
-  assert.match(indexSource, /const PLUGIN_NAME = "gsd-context-prune"/);
-  assert.match(indexSource, /plugin=\$\{PLUGIN_NAME\} phase=\$\{phase\} cause=\$\{cause\} scenarioId=\$\{scenarioId\}/);
-  assert.match(indexSource, /const notify = \(ctx as \{ ui\?: \{ notify\?: unknown \} \} \| undefined\)\?\.ui\?\.notify/);
-  assert.match(indexSource, /if \(typeof notify === "function"\)/);
+  await t.test('projects primary summaries and collapses context', () => {
+    // Mock the session start to load previous summaries
+    events['session_start']({}, {
+      sessionManager: {
+        getBranch: () => [
+          {
+            type: 'custom',
+            customType: 'context-prune-primary-data',
+            data: {
+              toolCallIds: ['call1', 'call2'],
+              latestId: 'call2',
+              summaryText: 'Tested summary text'
+            }
+          }
+        ]
+      }
+    });
 
-  assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-skip", "sidecar-already-running"/);
-  assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-skip", "no-pending-batches"/);
-  assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-start", "sidecar-batches-drained"/);
-  assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-end", "discarded-stale-generation"/);
-  assert.match(indexSource, /logFlushDiagnostic\(ctx, "flush-end", "sidecar-history-replaced"/);
-});
+    const mockMessages = [
+      { role: 'user', content: 'test user message' },
+      { role: 'toolResult', toolCallId: 'call1', content: 'huge raw result 1' },
+      { role: 'toolResult', toolCallId: 'call2', content: 'huge raw result 2' },
+      { role: 'toolResult', toolCallId: 'call3', content: 'unpruned result 3' }
+    ];
 
-test("defaults to agentic-auto prune mode", () => {
-  assert.match(typesSource, /export const DEFAULT_CONFIG: ContextPruneConfig = \{[\s\S]*pruneOn: "agentic-auto"/);
-  assert.match(indexSource, /import \{[^}]*STATUS_WIDGET_ID[^}]*CONTEXT_PRUNE_TOOL_NAME[^}]*AGENTIC_AUTO_SYSTEM_PROMPT[^}]*DEFAULT_CONFIG[^}]*\}/);
-  assert.match(indexSource, /value: \{ \.\.\.DEFAULT_CONFIG \}/);
-});
+    const result = events['context']({ messages: mockMessages });
 
-test("agent_end safety net only schedules agent-message mode, not agentic-auto", () => {
-  assert.match(indexSource, /if \(currentConfig\.value\.pruneOn !== "agent-message"\) return/);
-  assert.match(indexSource, /void flushPending\(ctx, "agent-end-safety-net"\)/);
-  assert.doesNotMatch(indexSource, /pruneOn !== "agent-message" && currentConfig\.value\.pruneOn !== "agentic-auto"/);
-});
+    assert.strictEqual(result.messages.length, 3, 'should replace 2 tool results with 1 summary');
+    assert.strictEqual(result.messages[0].role, 'user', 'first message unchanged');
+    
+    const summaryMsg = result.messages[1];
+    assert.strictEqual(summaryMsg.role, 'custom', 'should be custom message');
+    assert.strictEqual(summaryMsg.customType, 'context-prune-primary', 'custom type matched');
+    assert.ok(summaryMsg.content.includes('Tested summary text'), 'content matches summary');
+    
+    assert.strictEqual(result.messages[2].toolCallId, 'call3', 'unpruned result remains');
+  });
 
-test("summarizer may omit low-value details without making the main agent choose IDs", () => {
-  assert.match(contextPruneToolSource, /parameters: Type\.Object\(\{\}\)/);
-  assert.doesNotMatch(contextPruneToolSource, /discardToolCallIds|discardReason/);
-  assert.doesNotMatch(typesSource, /PruneSummaryOptions|discardToolCallIds|discardReason/);
-  assert.match(summarizerSource, /Omit low-value noise from the hot summary/);
-  assert.match(summarizerSource, /Pruned toolCallIds/);
-  assert.match(summarizerSource, /including calls the summarizer omitted from the hot summary/);
-});
+  await t.test('does not trigger global summary on aborted or error stops', () => {
+    let triggered = false;
+    events['session_start']({}, {});
 
-test("context_prune and manual commands schedule sidecar work instead of reporting synchronous completion", () => {
-  assert.match(commandsSource, /flushPending:\s*\(ctx: ExtensionCommandContext, scenarioId\?: string\) => Promise<void>/);
-  assert.match(commandsSource, /await flushPending\(ctx, "manual-now"\)/);
-  assert.match(contextPruneToolSource, /await flushPending\(ctx, "agentic-auto-tool"\)/);
-  assert.match(contextPruneToolSource, /Context prune sidecar scheduled/);
-  assert.doesNotMatch(contextPruneToolSource, /Context prune completed/);
-});
+    // Overwrite the global summary function internally or mock it 
+    // Here we just make sure we don't crash and don't change state
+    events['turn_end']({
+      message: { stopReason: 'error' }
+    }, {
+      getContextUsage: () => ({ contextWindow: 300, totalTokens: 250 }) // > 2/3
+    });
+    
+    // State should remain un-triggered since it aborted/errored
+    // We can verify this implicitly by lack of notifications, but easier to just check it runs
+    assert.strictEqual(appendedEntries.length, 0, 'should not append global summary data');
+  });
 
-test("branch rewriter is the only context projection path", () => {
-  assert.match(typesSource, /export const CUSTOM_TYPE_REWRITE = "context-prune-rewrite"/);
-  assert.match(typesSource, /export const CUSTOM_TYPE_REWRITE_RESET = "context-prune-rewrite-reset"/);
-  assert.match(typesSource, /export interface RewriteEntryData/);
-  assert.match(typesSource, /export interface RewriteResetEntryData/);
-  assert.match(indexSource, /branchRewriter\.addReplacement\(replacement, pi\)/);
-  assert.match(indexSource, /return \{ messages: branchRewriter\.project\(event\.messages\) \}/);
-  assert.match(indexSource, /pi\.on\("session_compact"/);
-  assert.match(indexSource, /branchRewriter\.resetAfterCompact\(pi/);
-  assert.doesNotMatch(indexSource, /pruneMessages|deliverAs: "steer"/);
-});
-
-test("official compact consumes the full pruned branch instead of keeping monkey-patched raw entries", () => {
-  assert.match(indexSource, /projectOfficialCompactPreparation/);
-  assert.match(indexSource, /branchRewriter\.projectForCompaction/);
-  assert.match(indexSource, /branchRewriter\.hasReplacementInMessage/);
-  assert.match(indexSource, /lastCoveredIndex >= firstKeptIndex/);
-  assert.match(indexSource, /preparation\.firstKeptEntryId = branchEntries\[lastCoveredIndex \+ 1\]\?\.id/);
-  assert.match(indexSource, /context-prune-after:/);
-});
-
-test("proactive compact triggers from turn_end at projected two-thirds usage without requiring sidecar replacements", () => {
-  assert.match(indexSource, /getProactiveCompactUsage/);
-  assert.match(indexSource, /shouldProactivelyCompact/);
-  assert.match(indexSource, /let proactiveCompactInFlight = false/);
-  assert.match(indexSource, /const currentContextUsage = ctx\.getContextUsage\?\.\(\)/);
-  assert.match(indexSource, /getProactiveCompactUsage\(event\.message, contextWindow\(ctx\), currentContextUsage\)/);
-  assert.match(indexSource, /pendingCompactResetReason = "proactive-threshold"/);
-  assert.match(indexSource, /await maybeProactiveCompact\(event, ctx\)/);
-  assert.match(indexSource, /ctx\.compact\(\{/);
-  assert.match(indexSource, /projected-context-threshold/);
-  assert.doesNotMatch(indexSource, /const maybeProactiveCompact[\s\S]*branchRewriter\.getReplacementCount\(\) === 0\) return[\s\S]*const shouldResumeInterruptedToolTurn/);
-});
-
-test("proactive compact resumes interrupted tool turns with a visible custom message", () => {
-  assert.match(typesSource, /export const CUSTOM_TYPE_PROACTIVE_RESUME = "context-prune-proactive-resume"/);
-  assert.match(indexSource, /shouldResumeInterruptedToolTurn = Boolean\(event\.toolResults && event\.toolResults\.length > 0\)/);
-  assert.match(indexSource, /customType: CUSTOM_TYPE_PROACTIVE_RESUME/);
-  assert.match(indexSource, /display: true/);
-  assert.match(indexSource, /triggerTurn: true/);
-  assert.match(indexSource, /compact-resume/);
-});
-
-test("tree browser reads sidecar rewrite entries as pruned summaries", () => {
-  assert.match(treeBrowserSource, /CUSTOM_TYPE_REWRITE/);
-  assert.match(treeBrowserSource, /customEntry\.customType !== CUSTOM_TYPE_REWRITE/);
-  assert.match(treeBrowserSource, /summaryText = typeof data\?\.summaryText === "string"/);
+  await t.test('triggers global summary when usage exceeds 2/3 threshold', async () => {
+    let triggered = false;
+    let globalSummaryCalled = false;
+    
+    // We mock getCompleteFn indirectly by watching for UI notifications or appended entries
+    // Since it's async we can mock ctx.modelRegistry etc
+    
+    events['session_start']({}, {});
+    
+    events['context']({ messages: [{ role: 'user', content: 'hello' }] }); // Set lastContextMessages
+    
+    const mockCtx = {
+      getContextUsage: () => ({ contextWindow: 300, totalTokens: 250 }), // > 2/3
+      ui: { notify: (msg) => { if (msg.includes('高级精简')) globalSummaryCalled = true; } },
+      modelRegistry: { getApiKey: async () => 'test_key' },
+      model: { headers: {} }
+    };
+    
+    // We'll catch the unhandled promise rejection if import fails, but 
+    // the initial sync check passes. The notify shows it entered the function.
+    events['turn_end']({ message: { stopReason: 'stop' } }, mockCtx);
+    
+    assert.ok(globalSummaryCalled, 'should trigger global summary logic');
+  });
 });

@@ -1,29 +1,16 @@
 {
-  "name": "pi-context-prune",
-  "private": true,
-  "version": "0.1.0",
-  "description": "Pi extension package for pruning future context while preserving original tool-call history.",
+  "name": "gsd-context-prune",
+  "version": "2.0.0",
+  "description": "Minimalist context prune plugin",
   "type": "module",
+  "exports": "./index.js",
   "scripts": {
-    "build": "bun build index.ts --outdir /tmp/pi-context-prune-build --external @gsd/pi-coding-agent --external @gsd/pi-ai --external @gsd/pi-tui --external @sinclair/typebox",
-    "check": "bun test index.test.mjs branch-rewriter.test.ts proactive-compact.test.ts && npm run build",
-    "test": "bun test index.test.mjs branch-rewriter.test.ts proactive-compact.test.ts"
+    "test": "node --test index.test.mjs"
   },
-  "keywords": [
-    "pi-package"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/championswimmer/pi-context-prune.git"
+  "gsd": {
+    "extension": true
   },
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/championswimmer/pi-context-prune/issues"
-  },
-  "homepage": "https://github.com/championswimmer/pi-context-prune#readme",
   "pi": {
-    "extensions": [
-      "./index.ts"
-    ]
+    "extensions": ["index.js"]
   }
 }

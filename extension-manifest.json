@@ -1,0 +1,10 @@
+{
+  "id": "context-prune",
+  "name": "Context Prune",
+  "version": "2.0.0",
+  "description": "Reduces context size through asynchronous sidecar summarization and phantom projection.",
+  "tier": "community",
+  "requires": {
+    "platform": "any"
+  }
+}
