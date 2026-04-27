@@ -1,35 +1,60 @@
-# GSD Context Prune (上下文修剪插件)
+# GSD Context Prune (上下文修剪 + 提示词注入插件)
 
-`gsd-context-prune` 是一款为 GSD 极度精简重构的上下文管理插件。它以不到 300 行的原生无依赖 JavaScript 代码，解决了在长代理会话中因 `toolResult` 堆积导致的上下文爆满和 Prompt Cache 抖动问题。
+`gsd-context-prune` 是一款为 GSD 极度精简重构的单文件插件。**内置集成了已废弃的 `gsd-hints-injector` 全部能力**，用户无需再单独安装 `gsd-hints-injector`。
 
-## 核心特性：化繁为简的双层精简
+它以不到 500 行的原生无依赖 JavaScript，解决两大问题：
+- 长代理会话中 `toolResult` 堆积导致的上下文爆满
+- 提示词缓存 (Prompt Cache) 命中率因动态内容下降
 
-### 1. 初级精简 (Primary Pruning) —— 按需折叠工具输出
-插件会静默监听大模型的所有工具调用，并将那些庞大的 `toolResult` 提取出来放入缓存队列。
-- 当大模型觉得自己需要“喘口气”，主动调用了无参数的 `context_prune` 工具时，插件就会在后台异步发送一个侧载 (Sidecar) LLM 请求。
-- 后台 LLM 会将这批工具结果浓缩成一段精炼的摘要。
-- 此后，在主代理请求上下文时，插件会在内存中把那些多余的 `toolResult` **幻影替换**成这条单薄的摘要（保留结构，缩减 Token）。主通道的执行永远不会被此后台进程阻塞。
+采用**一次成型**的对话结构，无需 `before_agent_start` 钩子或 custom 消息修补：
 
-### 2. 高级精简 (Global Summary) —— 满载态的世界线坍缩
-- 插件在每个回合结束（`turn_end`）时计算上下文使用率。一旦超过 `66.66%`，初级精简已经不够看了，系统将触发“高级精简”。
-- 插件把当前**已经打过初级补丁**的完整对话上下文送给伴随大模型，要求其只提炼“问题背景和当前进度”。
-- 伴随大模型返回的结果，将作为一次**世界线坍缩**，在主代理的下一次对话中替换掉历史所有的消息（仅保留系统提示词和折叠后的状态点）。
-- 主通道的代理对历史替换完全无感知：它依然认为自己在执行任务，但发给服务商的上下文包瞬间变回极度轻量的状态。
+```
+system(static) → user(dynamic context) → ai(收到) → user(real prompt) → ...
+```
+
+## 核心特性
+
+### 1. 双层上下文修剪 (Context Prune)
+
+#### 初级精简 (Primary Pruning) —— 按需折叠工具输出
+插件静默监听大模型的所有工具调用，并将庞大的 `toolResult` 提取到缓存队列。
+- 当大模型主动调用无参数的 `context_prune` 工具时，插件在后台异步发送 Sidecar LLM 请求。
+- 后台 LLM 将这批工具结果浓缩成摘要。
+- 后续请求上下文时，多余的 `toolResult` 被**幻影替换**为单条摘要。
+
+#### 高级精简 (Global Summary) —— 满载态的世界线坍缩
+- 每个回合结束时计算上下文使用率。超过 **2/3 (66.66%)** 时触发高级精简。
+- 插件把打过初级补丁的完整对话送给伴随 LLM，要求只提炼"问题背景和当前进度"。
+- 伴随 LLM 的结果作为**世界线坍缩**替换所有历史消息。主代理对此完全无感知。
+
+### 2. HINTS 注入（工具函数，无钩子）
+将配置在 `~/.gsd/HINTS.md` 和项目级 `.gsd/HINTS.md`（或根目录 `HINTS.md`）中的系统提示词注入到 system prompt。
+
+- `loadHintSources(cwd)` — 加载 HINTS 源
+- `buildHintsBlock(cwd)` — 构建格式化 HINTS 块
+
+上层调用者在构建 system prompt 时直接调用 `buildHintsBlock()` 将结果拼入即可，不涉及任何钩子或 custom 消息。
+
+### 3. 稳定 Payload 标识符 (Responses Stabilization)
+拦截并稳定 OpenAI / Azure OpenAI Responses API 负载中易变的会话级 ID（`msg_*` / `fc_*` / `call_*`），确保相同上下文片段跨会话生成一致 Hash，最大化缓存复用。自动计算 `prompt_cache_key`，也支持通过 `GSD_HINTS_PROMPT_CACHE_KEY` 环境变量手动指定。
+
+## 提示词来源 (HINTS Sources)
+
+1. **全局提示词**: `~/.gsd/HINTS.md` 或 `${GSD_HOME}/HINTS.md`
+2. **项目级提示词**: 当前工作目录的 `.gsd/HINTS.md`（优先），不存在时回退至根目录 `HINTS.md`
 
 ## 命令与持久化 (Commands & Persistence)
-
-插件提供了一条直观的控制命令，供用户随时切换负责做总结的“伴车模型”：
 
 ```bash
 /pruner anthropic/claude-haiku-3-5
 ```
 
-如果缺省，将默认使用你当前主代理相同的模型。
-你的选择会自动持久化保存到 `~/.gsd/context-prune.json` 中。所以只需配置一次，后续所有新的 GSD 会话和终端都会自动加载你最偏爱的伴车模型，彻底杜绝每次都需重设的繁琐。
+切换负责总结的"伴车模型"。缺省时使用与主代理相同的模型。
+选择持久化到 `~/.gsd/context-prune.json`，一次配置，所有会话生效。
 
 ## 安装
 
-这是为 `pi-coding-agent` (GSD) 开发的非官方社区插件。进入 GSD 配置的插件目录中：
+这是为 `pi-coding-agent` (GSD) 开发的社区插件。进入 GSD 配置的插件目录：
 
 ```bash
 git clone https://github.com/your-username/gsd-context-prune.git
@@ -48,30 +73,47 @@ git clone https://github.com/your-username/gsd-context-prune.git
 }
 ```
 
-## 架构：少即是多
+**注意**: `gsd-hints-injector` 的功能已合并至此插件。如果你之前安装了 `gsd-hints-injector`，请移除它，只保留 `gsd-context-prune` 即可。
 
-相较于被废弃的重度实现，该版本严格遵守：
-- **无阻塞 (Zero-Block)**：伴随大模型请求失败、超时均不会阻断主进程的运转。
-- **非破坏性投影 (Non-Destructive Projection)**：底层的核心历史永远是 Append-only 且真实的。压缩仅通过拦截 `context` 请求并施加幻影替换（投影）完成。
-- **零复杂状态管理**：没有任何 Class 和状态机，跨 Session 持久化仅仅通过读取 `pi.appendEntry` 中的对象即完成复原。
-- **尊重 Prompt Cache**：坚决避免像“每轮触发”这样高频破坏前缀缓存的逻辑，将折叠决策权交由大模型的内置逻辑或明确的阈值。
+## 架构：一次成型
+
+相比旧方案（`before_agent_start` 剥离动态内容 → custom 消息 → 检测连续 user 消息 → 注入 assistant 回应），新方案遵循自然对话流程：
+
+| 旧方案 | 新方案 |
+|---|---|
+| system prompt 混入动态内容 | system prompt 纯静态 |
+| `before_agent_start` 剥离到 custom 消息 | 动态内容直接作为第一条 user 消息 |
+| `context` 钩子检测修复连续消息 | 对话结构天然有序 |
+| `fixConsecutiveUserMessages` 注入"收到" | AI 自然地回应上下文 |
+
+新架构的事件线：
+- `session_start` → 恢复跨会话状态
+- `context` → 仅投影精简（无消息修复逻辑）
+- `turn_end` → 捕获工具调用 + 监控上下文使用率
+- `before_provider_request` → 仅稳定 Payload ID
 
 ## 运行测试
 
-只需安装 Node.js (>=20) ，即可运行零外部依赖的内建断言测试：
-
 ```bash
-npm run test
-# 或者: node --test index.test.mjs
+node --test index.test.mjs
 ```
 
-```text
-▶ gsd-context-prune
-  ✔ registers all required events, tools, and commands (0.44ms)
-  ✔ projects primary summaries and collapses context (0.27ms)
-  ✔ does not trigger global summary on aborted or error stops (0.17ms)
-  ✔ triggers global summary when usage exceeds 2/3 threshold (6.35ms)
-✔ gsd-context-prune (8.48ms)
+预期输出（15 个测试全部通过）：
+
+```
+▶ ...
+✔ registers all lifecycle hooks, tools, and commands (0.7ms)
+✔ loadHintSources: loads global hints and prefers .gsd/HINTS.md (0.6ms)
+✔ buildHintsBlock: returns empty string when no hints exist (0.3ms)
+✔ buildHintsBlock: builds formatted hints block (0.4ms)
+✔ stabilizes cache key and identifiers (0.4ms)
+✔ projectMessages: passes through with no summaries (0.2ms)
+✔ full integration: session_start restores persisted summaries (0.3ms)
+✔ context hook does not inject assistant messages (one-shot pattern) (0.1ms)
+...
+ℹ tests 15
+ℹ pass 15
+ℹ fail 0
 ```
 
 ## 证书

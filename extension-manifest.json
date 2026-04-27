@@ -1,10 +1,13 @@
 {
   "id": "context-prune",
-  "name": "Context Prune",
-  "version": "2.0.0",
-  "description": "Reduces context size through asynchronous sidecar summarization and phantom projection.",
+  "name": "Context Prune + Hints Injector",
+  "version": "3.0.0",
+  "description": "Reduces context size through sidecar summarization and phantom projection. Injects HINTS.md into systemPrompt, moves dynamic date/cwd context into hidden messages, stabilizes OpenAI Responses payload identifiers. Merged from gsd-context-prune + gsd-hints-injector.",
   "tier": "community",
   "requires": {
-    "platform": "any"
+    "platform": ">=2.29.0"
+  },
+  "provides": {
+    "hooks": ["before_agent_start", "before_provider_request", "session_start", "context", "turn_end"]
   }
 }

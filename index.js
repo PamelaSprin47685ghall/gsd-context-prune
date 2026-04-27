@@ -1,6 +1,59 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { createHash } from "node:crypto";
+
+// ===========================================================================
+// gsd-context-prune — 双层上下文修剪 (Primary + Global Summary)
+//
+// 不再使用 before_agent_start 钩子和 custom 消息的变通方案。
+// 遵循一次成型方式：system(static) → user(dynamic) → ai(收到) → user(real)
+//
+// 保留的外部能力：
+//   - loadHintSources / buildHintsBlock — 供上层调用者在构建 system prompt 时使用
+//   - stabilizeResponsesInput / stabilizeResponsesPayload — Payload ID 稳定
+//   - projectMessages — 双层级联精简投影
+//   - 整体插件：session_start / context / turn_end / before_provider_request
+// ===========================================================================
+
+function readFile(p) {
+  try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }
+}
+
+export function loadHintSources(cwd) {
+  const s = [];
+  const gPath = path.join(process.env.GSD_HOME || path.join(os.homedir(), ".gsd"), "HINTS.md");
+  const g = readFile(gPath);
+  if (g) s.push({ label: "Global", path: gPath, content: g });
+
+  if (cwd) {
+    const p1 = path.join(cwd, ".gsd", "HINTS.md"), p2 = path.join(cwd, "HINTS.md");
+    const c1 = readFile(p1), c2 = readFile(p2);
+    if (c1) s.push({ label: "Project", path: p1, content: c1 });
+    else if (c2) s.push({ label: "Project", path: p2, content: c2 });
+  }
+  return s;
+}
+
+/**
+ * buildHintsBlock — 构建 HINTS 静态注入块，供上层在构建 system prompt 时调用。
+ * 返回空字符串表示无 HINTS。不涉及任何钩子或 custom 消息。
+ */
+export function buildHintsBlock(cwd) {
+  const sources = loadHintSources(cwd);
+  if (!sources.length) return "";
+  return `[HINTS — Stable Guidance]
+
+These instructions come from HINTS.md files and are intentionally injected into the stable system prompt.
+
+${
+    sources.map(s => `## ${s.label} HINTS (${s.path})\n\n${s.content}`).join("\n\n")
+  }`;
+}
+
+// ===========================================================================
+// 上下文修剪核心
+// ===========================================================================
 
 let summarizerModelId = "default";
 const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
@@ -44,14 +97,18 @@ async function getCompleteFn() {
     const mod = await import("@gsd/pi-ai");
     return mod.complete;
   } catch (err) {
-    throw new Error("Cannot import @gsd/pi-ai. " + err.message);
+    throw new Error(
+      "Cannot import @gsd/pi-ai — sidecar summarization disabled. " +
+      "Ensure @gsd/pi-ai is installed and resolvable from this extension. " +
+      err.message
+    );
   }
 }
 
-function projectMessages(rawMessages) {
+export function projectMessages(rawMessages) {
   let messages = [...rawMessages];
 
-  // 1. 初级精简投影 (Primary Pruning)
+  // ---- Primary Pruning ----
   for (const sum of primarySummaries) {
     const summarizedIds = new Set(sum.toolCallIds);
     let insertIndex = -1;
@@ -80,7 +137,7 @@ function projectMessages(rawMessages) {
     messages = newMessages;
   }
 
-  // 2. 高级精简投影 (Global Summary)
+  // ---- Global Summary ----
   if (globalSummary) {
     const newMessages = [];
     let hasInsertedGlobal = false;
@@ -170,7 +227,7 @@ async function triggerGlobalSummary(ctx, pi, projectedMessages) {
       return `[${m.role}] ${content}`;
     }).join("\n\n");
 
-    const prompt = `请将以下所有的对话与执行历史，浓缩总结为“问题背景”和“当前进度”。
+    const prompt = `请将以下所有的对话与执行历史，浓缩总结为"问题背景"和"当前进度"。
 保留当前正在执行的任务目标、已确认的约束和接下来需要做的事情。
 丢弃琐碎的尝试过程。
 
@@ -184,13 +241,13 @@ ${textMessages}
 
     const summaryText = response.content.map(c => c.text).join("\n");
     const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
-    
+
     const data = {
       text: summaryText,
       collapsedIds: Array.from(collapsedIds),
       timestamp: Date.now()
     };
-    
+
     globalSummary = { ...data, collapsedIds };
     pi.appendEntry("context-prune-global-data", data);
     ctx.ui?.notify("pruner: 高级精简完成，历史已被折叠。", "info");
@@ -200,6 +257,64 @@ ${textMessages}
     isGlobalSummarizing = false;
   }
 }
+
+// ===========================================================================
+// Payload 稳定（仍保留，无关对话结构）
+// ===========================================================================
+
+export function stabilizeResponsesInput(input) {
+  const callMap = new Map();
+  let m = 0, f = 0, changed = false;
+
+  const getCallId = (id) => {
+    if (!callMap.has(id)) callMap.set(id, `call_${callMap.size}`);
+    return callMap.get(id);
+  };
+
+  const next = input.map(i => {
+    if (!i || typeof i !== "object") return i;
+    let out = i;
+    const upd = (k, v) => { if (out[k] !== v) { if (out === i) out = { ...i }; out[k] = v; changed = true; } };
+
+    if (i.type === "message" && i.role === "assistant" && typeof i.id === "string") upd("id", `msg_${m++}`);
+    if (i.type === "function_call") {
+      if (typeof i.call_id === "string") upd("call_id", getCallId(i.call_id));
+      if (typeof i.id === "string") upd("id", `fc_${f++}`);
+    }
+    if (i.type === "function_call_output" && typeof i.call_id === "string") upd("call_id", getCallId(i.call_id));
+    return out;
+  });
+  return { input: next, changed };
+}
+
+export function stabilizeResponsesPayload(event) {
+  const p = event.payload;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return undefined;
+  if (!["openai-responses", "azure-openai-responses"].includes(event.model?.api || "") && !(Array.isArray(p.input) && ("prompt_cache_key" in p || "store" in p))) return undefined;
+
+  let changed = false;
+  const next = { ...p };
+
+  const key = process.env.GSD_HINTS_PROMPT_CACHE_KEY?.trim() || (() => {
+    if (!Array.isArray(next.input)) return undefined;
+    const text = next.input.filter(i => i && typeof i === "object" && (i.role === "system" || i.role === "developer"))
+      .map(i => typeof i.content === "string" ? i.content : Array.isArray(i.content) ? i.content.map((b) => b?.text || "").join("\n") : "")
+      .filter(Boolean).join("\n\n");
+    return text ? `gsd-hints:${createHash("sha256").update(text).digest("hex").slice(0, 24)}` : undefined;
+  })();
+
+  if (key && next.prompt_cache_key !== key) { next.prompt_cache_key = key; changed = true; }
+
+  if (Array.isArray(next.input)) {
+    const { input, changed: c } = stabilizeResponsesInput(next.input);
+    if (c) { next.input = input; changed = true; }
+  }
+  return changed ? next : undefined;
+}
+
+// ===========================================================================
+// Plugin entry
+// ===========================================================================
 
 export default function contextPrunePlugin(pi) {
   pi.on("session_start", (event, ctx) => {
@@ -225,9 +340,11 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
+  // ---- 投影：仅精简，无消息修复逻辑 ----
   pi.on("context", (event) => {
-    lastContextMessages = event.messages || [];
-    return { messages: projectMessages(lastContextMessages) };
+    const messages = event.messages || [];
+    lastContextMessages = messages;
+    return { messages: projectMessages(messages) };
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -257,14 +374,23 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
+  // ---- 仅稳定 Payload，不涉及对话结构 ----
+  pi.on("before_provider_request", (e) => {
+    const r = stabilizeResponsesPayload(e);
+    if (r) return r;
+  });
+
+  // ---- tools & commands ----
   pi.registerTool({
     name: "context_prune",
     description: "Summarize and prune preceding tool-call results to reduce context size. Call this after completing a batch of work.",
     parameters: { type: "object", properties: {} },
     execute: async (_id, _params, _sig, _onUpdate, ctx) => {
-      if (pendingToolCalls.length > 0) {
+      if (pendingToolCalls.length > 0 && !isPrimarySummarizing) {
         triggerPrimarySummary(ctx, pi, [...pendingToolCalls]);
         pendingToolCalls.length = 0;
+      } else if (pendingToolCalls.length > 0 && isPrimarySummarizing) {
+        ctx.ui?.notify?.("pruner: 上一轮精简仍在进行中，等待下一轮处理。", "info");
       }
       return { content: [{ type: "text", text: "Context prune sidecar scheduled. Normal work can continue." }] };
     }
