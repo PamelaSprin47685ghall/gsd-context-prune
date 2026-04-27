@@ -68,7 +68,7 @@ test("before_provider_request: idempotent — does not double-inject HINTS", () 
   });
 })));
 
-test("before_provider_request: skips injection when no HINTS files exist", () => withTmp(pDir => withTmp(gDir => {
+test("before_provider_request: always injects context_prune hint (even without user HINTS)", () => withTmp(pDir => withTmp(gDir => {
   withEnv("GSD_HOME", gDir, () => {
     setCodebaseDir(pDir);
     const events = makePlugin();
@@ -81,7 +81,8 @@ test("before_provider_request: skips injection when no HINTS files exist", () =>
         ]
       }
     });
-    assert.ok(!result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content.includes("Context Prune Discipline"));
   });
 })));
 

@@ -31,8 +31,13 @@ test("loadHintSources: returns empty when no hints", () => withTmp(pDir => withT
   withEnv("GSD_HOME", gDir, () => assert.equal(loadHintSources(pDir).length, 0));
 })));
 
-test("buildHintsBlock: returns empty string when no hints", () => withTmp(pDir => withTmp(gDir => {
-  withEnv("GSD_HOME", gDir, () => assert.equal(buildHintsBlock(pDir), ""));
+test("buildHintsBlock: returns context_prune hint when no user hints", () => withTmp(pDir => withTmp(gDir => {
+  withEnv("GSD_HOME", gDir, () => {
+    const r = buildHintsBlock(pDir);
+    assert.ok(r.includes("[HINTS — Stable Guidance]"));
+    assert.ok(r.includes("Context Prune Discipline"));
+    assert.ok(r.includes("context_prune"));
+  });
 })));
 
 test("buildHintsBlock: formats hints block", () => withTmp(pDir => withTmp(gDir => {

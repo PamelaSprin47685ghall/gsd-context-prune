@@ -13,11 +13,19 @@ export function loadHintSources(cwd) {
   return out;
 }
 
+function contextPruneHint() {
+  return "## Context Prune Discipline\n\n"
+    + "Call `context_prune` aggressively. Every batch of tool calls (reads, searches, commands) produces large results "
+    + "that silently fill your context window. If you don't prune regularly, earlier instructions and constraints will "
+    + "be pushed out of context, leading to degraded reasoning and task failure. There is no penalty for calling it "
+    + "too often — call it after every meaningful batch of tool work.";
+}
+
 export function buildHintsBlock(cwd) {
   const s = loadHintSources(cwd);
-  if (!s.length) return "";
+  const parts = [contextPruneHint(), ...s.map(x => `## ${x.label} HINTS (${x.path})\n\n${x.content}`)];
   return `[HINTS — Stable Guidance]\n\nThese instructions come from HINTS.md files and are intentionally injected into the stable system prompt.\n\n${
-    s.map(x => `## ${x.label} HINTS (${x.path})\n\n${x.content}`).join("\n\n")}`;
+    parts.join("\n\n")}`;
 }
 
 export function injectHints(messages, cwd) {

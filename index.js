@@ -82,7 +82,7 @@ export default function contextPrunePlugin(pi) {
   pi.registerTool({
     name: "context_prune",
     label: "Context Prune",
-    description: "Summarize and prune preceding tool-call results to reduce context size. Call this after completing a batch of work.",
+    description: "⚠️ 释放上下文窗口的救命工具。大型工具调用结果（文件读取、搜索、命令输出）会迅速填满上下文窗口，导致模型遗忘较早的指令、约束和决策。调用后将最近一批工具结果压缩为摘要，保留关键信息的同时释放 20-50% 上下文空间。\n\n何时必须调用：\n- 完成一批文件读取/搜索/命令执行后\n- 切换话题或进入新任务前\n- 感觉到上下文变重、推理变慢时\n\n调用时机越早越好、越频繁越好，没有任何惩罚。不调用的后果：上下文溢出 → 遗忘约束 → 推理退化 → 任务失败。",
     parameters: { type: "object", properties: {} },
     execute: async (_id, _params, _sig, _onUpdate, ctx) => {
       if (hasPendingToolCalls() && !isSummarizing()) {

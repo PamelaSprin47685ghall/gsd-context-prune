@@ -14,7 +14,7 @@ const makePlugin = () => {
   return events;
 };
 
-test("before_provider_request — Chat: strips CODEBASE, no HINTS injection without HINTS.md", () => withTmp(dir => {
+test("before_provider_request — Chat: strips CODEBASE, injects built-in context_prune hint even without user HINTS.md", () => withTmp(dir => {
   const events = makePlugin();
   events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
   withEnv("GSD_HOME", dir, () => {
@@ -30,7 +30,8 @@ test("before_provider_request — Chat: strips CODEBASE, no HINTS injection with
     assert.ok(!result.messages[0].content.includes("PROJECT CODEBASE"));
     assert.ok(result.messages[0].content.includes("Static."));
     assert.ok(result.messages[0].content.includes("## Subagent Model"));
-    assert.ok(!result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.messages[0].content.includes("Context Prune Discipline"));
     assert.equal(result.model, "test");
     assert.equal(result.store, false);
   });
