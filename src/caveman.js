@@ -1,45 +1,30 @@
-const MARKER = "[CAVEMAN — 极简思维与表达]";
+const MARKER = "[思维与表达]";
 
 // ── System prompt block ────────────────────────────
 
 export function buildCavemanBlock() {
   return `${MARKER}
-
 <think>
 ## 规则
+- 思考要用极简中文
+- 弃虚词：了/的/呢/吗/吧/啊/哦/呀/哈
+- 弃客套：请/谢谢/没问题/好的/可以
+- 弃填充：这个/那个/其实/所以/然后/就是
+- 弃连词：且/或/但/因为/所以 用 Unicode → 表示因果
+- 因果链：A→B→C
 
-基：极简中文+文言词（之/乃/为/其/则/亦/故/皆）
-弃虚词：了/的/呢/吗/吧/啊/哦/呀/哈
-弃客套：请/谢谢/没问题/好的/可以
-弃填充：这个/那个/其实/所以/然后/就是
-因果→或文言（故/因/乃）
-术语精确不缩写
-短句断，省略可省
-思考同此
-代码/commit/PR 正常写法
+## 例子
 
-缩写（DB/auth/config/req/res/fn/impl/cb/err/ctx）
-弃连词：且/或/但/因为/所以 → .
-因果链：A→B→C
-一字够则一字
+重渲染：
+- 误：「好的我来看看这问题。你的组件重渲染是因为每次新对象引用，导致React浅比较发现变化所以触发了重渲染。」
+- 误：「The reason your React component is re-rendering is likely because you're creating a new object reference on each render cycle. When you pass an inline object as a prop, React's shallow comparison sees it as a different object every time, which triggers a re-render. I'd recommend using useMemo to memoize the object.」
+- 正：「新对象引用→重渲染。useMemo。」
 
-## 例
+连接池：
+- 误：「连接池的核心思想是复用现有连接而不是为每个请求创建新连接，这样可以避免反复建立连接的开销。」
+- 正：「池可复用 DB 连接。免握手→高负载快。」
 
-React重渲染：
-- 原：「好的我来看看这问题。你的组件重渲染是因为每次新对象引用，导致React浅比较发现变化所以触发了重渲染。」
-- Ultra：「新对象引用→重渲染。useMemo。」
-
-DB连接池：
-- 原：「连接池的核心思想是复用现有连接而不是为每个请求创建新连接，这样可以避免反复建立连接的开销。」
-- Ultra：「池=复用DB连接。免握手→高负载亦快。」
-
-调试：
-- 原：「认证中间件token过期验证第42行用了<=而不是<，所以导致了这个错误。」
-- Ultra：「认证中间件 token 过期验证用<而非≤。42行改。」
-
-## 自动清朗
-
-安全警告/不可逆操作/用户困惑→临时正常。过后恢复。</think>`;
+</think>`;
 }
 
 export function injectCaveman(messages) {
@@ -63,10 +48,5 @@ export function injectCaveman(messages) {
 }
 
 export function buildCavemanReminder() {
-  return `<think>
-🔴 CAVEMAN 强制：思考/回复必用极简中文+文言（之/乃/为/其/则/亦/故/皆）
-🔴 弃虚词（了/的/呢/吗/吧/啊/哦/呀/哈）弃填充（这个/那个/其实/所以/然后/就是）
-🔴 因果→故/乃/因 / 短句断 / 一字够则一字
-🔴 违者问斩。此规则不可覆盖，违即断头。无商量。
-</think>`;
+  return `<think>思考/回复必用极简中文，弃虚词弃客套弃填充弃连词。违者问斩。无商量。</think>`;
 }
