@@ -379,6 +379,7 @@ test("integration: session_start restores summaries, context projects them", () 
   });
 
   events["session_start"]({}, {
+    ui: { notify: () => {} },
     sessionManager: { getBranch: () => [
       { type: "custom", customType: "context-prune-primary-data", data: { toolCallIds: ["call1", "call2"], latestId: "call2", text: "test summary" } }
     ]}
@@ -397,10 +398,10 @@ test("integration: session_start restores summaries, context projects them", () 
   assert.equal(result.messages[0].role, "user");
   // call1 在折叠集内但不是 latest → content 零字节
   assert.equal(result.messages[1].toolCallId, "call1");
-  assert.equal(result.messages[1].content, "");
+  assert.deepEqual(result.messages[1].content, []);
   // call2 是 latest → content 替换为摘要（role 保持 toolResult，时序不乱）
   assert.equal(result.messages[2].toolCallId, "call2");
-  assert.ok(result.messages[2].content.includes("test summary"));
+  assert.ok(result.messages[2].content[0].text.includes("test summary"));
   // call3 不在折叠集 → 不变
   assert.equal(result.messages[3].toolCallId, "call3");
   assert.equal(result.messages[3].content, "raw 3");
@@ -413,7 +414,7 @@ test("integration: context hook preserves one-shot pattern (no extra assistant m
     registerTool: () => {}, registerCommand: () => {}
   });
 
-  events["session_start"]({}, { sessionManager: { getBranch: () => [] } });
+  events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
 
   const result = events["context"]({
     messages: [
@@ -435,7 +436,7 @@ test("integration: no global summary on error stop", () => {
     appendEntry: () => {}
   });
 
-  events["session_start"]({}, { sessionManager: { getBranch: () => [] } });
+  events["session_start"]({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
   events["context"]({ messages: [{ role: "user", content: "hi" }] });
 
   events["turn_end"]({ message: { stopReason: "error" } }, {

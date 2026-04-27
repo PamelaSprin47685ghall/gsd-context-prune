@@ -182,7 +182,7 @@ export function stabilizeIds(input) {
 
 let summaries = []; // { type:'primary'|'global', ... }
 
-function zeroContent(v) { return Array.isArray(v) ? [] : ""; }
+function zeroContent(v) { return []; }
 
 /** 保持结构，把已折叠消息的内容清空为 0 字节，并注入摘要。 */
 export function projectMessages(messages) {
@@ -202,7 +202,7 @@ export function projectMessages(messages) {
       if (pos !== -1) {
         keep[pos] = {
           ...keep[pos],
-          content: `【初级精简摘要】\n${s.text}`
+          content: [{ type: "text", text: `【初级精简摘要】\n${s.text}` }]
         };
       }
       result = keep;
@@ -222,7 +222,7 @@ export function projectMessages(messages) {
           if (!inserted && afterSys !== -1) {
             kept.splice(afterSys, 0, {
               id: `global-sum-${s.timestamp}`, role: "assistant",
-              content: `【高级精简：世界线坍缩】\n${s.text}`
+              content: [{ type: "text", text: `【高级精简：世界线坍缩】\n${s.text}` }]
             });
             afterSys++;
             inserted = true;
@@ -261,7 +261,7 @@ let summarizing = false;
 
 async function triggerPrimarySummary(ctx, pi, batches) {
   summarizing = true;
-  ctx.ui?.notify(`pruner: 正在进行初级精简 (${batches.length} 个工具调用)...`, "info");
+  ctx.ui.notify(`pruner: 正在进行初级精简 (${batches.length} 个工具调用)...`, "info");
   try {
     const model = summarizerModelId === "default" ? ctx.model
       : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
@@ -281,15 +281,15 @@ async function triggerPrimarySummary(ctx, pi, batches) {
     const latestId = toolCallIds[toolCallIds.length - 1];
     summaries.push({ type: "primary", toolCallIds, latestId, text: summaryText });
     pi.appendEntry("context-prune-primary-data", { toolCallIds, latestId, text: summaryText });
-    ctx.ui?.notify("pruner: 初级精简完成，工具输出已被折叠。", "info");
+    ctx.ui.notify("pruner: 初级精简完成，工具输出已被折叠。", "success");
   } catch (err) {
-    ctx.ui?.notify(`pruner: 初级精简失败 - ${err.message}`, "error");
+    ctx.ui.notify(`pruner: 初级精简失败 - ${err.message}`, "error");
   } finally { summarizing = false; }
 }
 
 async function triggerGlobalSummary(ctx, pi, projectedMessages) {
   summarizing = true;
-  ctx.ui?.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
+  ctx.ui.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
   try {
     const model = summarizerModelId === "default" ? ctx.model
       : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
@@ -310,9 +310,9 @@ async function triggerGlobalSummary(ctx, pi, projectedMessages) {
     const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
     summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
     pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
-    ctx.ui?.notify("pruner: 高级精简完成，历史已被折叠。", "info");
+    ctx.ui.notify("pruner: 高级精简完成，历史已被折叠。", "success");
   } catch (err) {
-    ctx.ui?.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
+    ctx.ui.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
   } finally { summarizing = false; }
 }
 
@@ -355,6 +355,10 @@ export default function contextPrunePlugin(pi) {
       if (entry.customType === "context-prune-global-data")
         summaries.push({ type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) });
     }
+    ctx.ui.notify(
+      `pruner: 已加载。伴随模型 ${summarizerModelId}，会话摘要 ${summaries.length} 条已恢复。`,
+      "info"
+    );
   });
 
   // context hook：CODEBASE 剥离 → 文件列表注入 → 摘要投影
@@ -416,16 +420,20 @@ export default function contextPrunePlugin(pi) {
 
   pi.registerTool({
     name: "context_prune",
+    label: "Context Prune",
     description: "Summarize and prune preceding tool-call results to reduce context size. Call this after completing a batch of work.",
     parameters: { type: "object", properties: {} },
     execute: async (_id, _params, _sig, _onUpdate, ctx) => {
       if (pendingToolCalls.length > 0 && !summarizing) {
+        ctx.ui.notify(`pruner: 开始精简 ${pendingToolCalls.length} 个工具调用...`, "info");
         triggerPrimarySummary(ctx, pi, [...pendingToolCalls]);
         pendingToolCalls.length = 0;
       } else if (pendingToolCalls.length > 0 && summarizing) {
-        ctx.ui?.notify?.("pruner: 上一轮精简仍在进行中，等待下一轮处理。", "info");
+        ctx.ui.notify("pruner: 上一轮精简仍在进行中，等待下一轮处理。", "info");
+      } else {
+        ctx.ui.notify("pruner: 当前无待精简的工具调用。", "info");
       }
-      return { content: [{ type: "text", text: "Context prune sidecar scheduled." }] };
+      return { content: [{ type: "text", text: "Context prune processed." }] };
     }
   });
 
@@ -435,9 +443,9 @@ export default function contextPrunePlugin(pi) {
       if (args.length > 0) {
         summarizerModelId = args[0];
         saveSettings();
-        ctx.ui?.notify(`pruner: 伴随模型已切换为 ${summarizerModelId}`, "info");
+        ctx.ui.notify(`pruner: 伴随模型已切换为 ${summarizerModelId}`, "info");
       } else {
-        ctx.ui?.notify(`pruner: 当前伴随模型为 ${summarizerModelId}。用法: /pruner provider/model-id`, "info");
+        ctx.ui.notify(`pruner: 当前伴随模型为 ${summarizerModelId}。用法: /pruner provider/model-id`, "info");
       }
     }
   });
