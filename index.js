@@ -150,32 +150,30 @@ function computeCacheKey(messages) {
   return t ? `gsd-hints:${createHash("sha256").update(t).digest("hex").slice(0, 24)}` : "";
 }
 
-// ── Step 4: ID 稳定化（Responses API）───────────────────────────────────────
+// ── Step 4: ID 剥离（Completions / Responses API）─────────────────────────
 
-/** 将 Responses API 的随机 ID 稳定为 msg_0, fc_0, call_0。 */
+/** 剥离 assistant message 的 id 和 function_call 的 id/call_id，
+ *  这些随机 ID 在 API 回传中无需复用，直接去掉让 provider 自动分配即可。 */
 export function stabilizeIds(input) {
-  const map = new Map();
-  let mi = 0, fi = 0, changed = false;
+  let changed = false;
   const out = input.map(x => {
     if (!x || typeof x !== "object") return x;
-    let o = x;
-    if (x.type === "message" && x.role === "assistant" && typeof x.id === "string")
-      { o = { ...x, id: `msg_${mi++}` }; changed = true; }
-    if (x.type === "function_call") {
-      if (typeof x.call_id === "string") {
-        if (!map.has(x.call_id)) map.set(x.call_id, `call_${map.size}`);
-        const cid = map.get(x.call_id);
-        if (x.call_id !== cid) { o = o === x ? { ...x } : o; o.call_id = cid; changed = true; }
-      }
-      if (typeof x.id === "string")
-        { o = o === x ? { ...x } : o; o.id = `fc_${fi++}`; changed = true; }
+    if (x.type === "message" && x.role === "assistant" && typeof x.id === "string") {
+      const { id, ...rest } = x;
+      changed = true;
+      return rest;
+    }
+    if (x.type === "function_call" && (typeof x.id === "string" || typeof x.call_id === "string")) {
+      const { id, call_id, ...rest } = x;
+      changed = true;
+      return rest;
     }
     if (x.type === "function_call_output" && typeof x.call_id === "string") {
-      if (!map.has(x.call_id)) map.set(x.call_id, `call_${map.size}`);
-      const cid = map.get(x.call_id);
-      if (x.call_id !== cid) { o = { ...x, call_id: cid }; changed = true; }
+      const { call_id, ...rest } = x;
+      changed = true;
+      return rest;
     }
-    return o;
+    return x;
   });
   return changed ? out : input;
 }

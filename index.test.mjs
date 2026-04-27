@@ -146,7 +146,7 @@ test("stabilizePayload: Chat — strips CODEBASE, injects to last user", () => {
   assert.ok(event.payload.messages[0].content.includes("PROJECT CODEBASE"));
 });
 
-test("stabilizePayload: Responses — strips, injects, stabilizes IDs", () => {
+test("stabilizePayload: Responses — strips CODEBASE, injects, strips IDs", () => {
   const event = {
     payload: {
       model: "gpt-5",
@@ -165,8 +165,9 @@ test("stabilizePayload: Responses — strips, injects, stabilizes IDs", () => {
   assert.ok(!r.input[0].content[0].text.includes("PROJECT CODEBASE"));
   assert.ok(r.input[5].content.some(c => c.text?.includes("<system-notification>")));
   assert.ok(!r.input[1].content.some(c => c.text?.includes("<system-notification>")));
-  assert.ok(r.input[3].id?.startsWith("fc_"));
-  assert.ok(r.input[3].call_id?.startsWith("call_"));
+  assert.equal(r.input[3].id, undefined);
+  assert.equal(r.input[3].call_id, undefined);
+  assert.equal(r.input[4].call_id, undefined);
   assert.ok(r.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
@@ -242,7 +243,7 @@ test("stabilizePayload: preserves other payload fields", () => {
 // stabilizeIds
 // ===========================================================================
 
-test("stabilizeIds: rewrites msg_/fc_/call_ IDs sequentially", () => {
+test("stabilizeIds: strips assistant message id and function_call id/call_id", () => {
   const input = [
     { type: "message", role: "assistant", id: "msg_rnd", content: [] },
     { type: "function_call", id: "fc_rnd", call_id: "call_rnd" },
@@ -250,30 +251,30 @@ test("stabilizeIds: rewrites msg_/fc_/call_ IDs sequentially", () => {
     { type: "message", role: "assistant", id: "msg_other", content: [] }
   ];
   const out = stabilizeIds(input);
-  assert.equal(out[0].id, "msg_0");
-  assert.equal(out[1].id, "fc_0");
-  assert.equal(out[1].call_id, "call_0");
-  assert.equal(out[2].call_id, "call_0");
-  assert.equal(out[3].id, "msg_1");
+  assert.equal(out[0].id, undefined);
+  assert.equal(out[1].id, undefined);
+  assert.equal(out[1].call_id, undefined);
+  assert.equal(out[2].call_id, undefined);
+  assert.equal(out[3].id, undefined);
   assert.ok(out !== input);
 });
 
-test("stabilizeIds: preserves reasoning items and already-stable IDs", () => {
+test("stabilizeIds: preserves reasoning items and strips function_call_output call_id", () => {
   const input = [
     { type: "reasoning", id: "rs_id" },
     { type: "function_call_output", call_id: "late" }
   ];
   const out = stabilizeIds(input);
   assert.equal(out[0].id, "rs_id");
-  assert.equal(out[1].call_id, "call_0");
+  assert.equal(out[1].call_id, undefined);
 });
 
-test("stabilizeIds: stabilizes already-stable IDs deterministically", () => {
+test("stabilizeIds: strips already-stable IDs too", () => {
   const input = [
     { type: "message", role: "assistant", id: "msg_0", content: [] }
   ];
   const out = stabilizeIds(input);
-  assert.equal(out[0].id, "msg_0");
+  assert.equal(out[0].id, undefined);
   assert.ok(out !== input);
 });
 
@@ -331,7 +332,7 @@ test("before_provider_request — Chat: only sets cache key", () => {
   assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
-test("before_provider_request — Responses: cache key + ID stabilization", () => {
+test("before_provider_request — Responses: cache key + ID stripping", () => {
   const events = {};
   contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
   const result = events["before_provider_request"]({
@@ -345,7 +346,7 @@ test("before_provider_request — Responses: cache key + ID stabilization", () =
   });
   assert.ok(result);
   assert.ok(result.input[0].content.includes("Static."));
-  assert.ok(result.input[2].id?.startsWith("msg_"));
+  assert.equal(result.input[2].id, undefined);
   assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
@@ -362,7 +363,7 @@ test("before_provider_request — Responses: works without CODEBASE", () => {
     }
   });
   assert.ok(result);
-  assert.ok(result.input[2].id?.startsWith("msg_"));
+  assert.equal(result.input[2].id, undefined);
   assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
