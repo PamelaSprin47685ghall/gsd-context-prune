@@ -406,7 +406,7 @@ export default function contextPrunePlugin(pi) {
     const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
     if (!messages) return;
 
-    const key = computeCacheKey(messages);
+    const key = computeCacheKey(stripMessages(messages));
     let result = key ? { ...p, prompt_cache_key: key } : p;
     let changed = result !== p;
 
