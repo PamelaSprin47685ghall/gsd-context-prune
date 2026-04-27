@@ -414,8 +414,6 @@ export function stabilizePayload(event) {
       modified = true;
     }
   }
-  if (!modified) return undefined;
-
   // 2. 找到最后一条 user 消息，追加 notification（append-only，不删旧的）
   let lastUser = null;
   for (let i = cloned.length - 1; i >= 0; i--) {
@@ -525,11 +523,16 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
-  // ---- 投影：仅精简，无消息修复逻辑 ----
+  // ---- 猴子补丁：CODEBASE 剥离 + 文件列表注入 + 投影合成 ----
   pi.on("context", (event) => {
     const messages = event.messages || [];
-    lastContextMessages = messages;
-    return { messages: projectMessages(messages) };
+
+    // Phase 1: 猴子补丁 — 剥离 CODEBASE 动态段 + 注入实时文件列表
+    const patched = projectSystem(messages);
+    lastContextMessages = patched;
+
+    // Phase 2: 猴子补丁 — summary 投影（剥离 toolResult + 注入 fake summary）
+    return { messages: projectMessages(patched) };
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -559,14 +562,43 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
-  // ---- 整个 provider 层就一行：稳定化 → 缓存命中 ----
+  // ---- 仅处理 Responses API 脏活：ID 稳定 + cache key ----
   pi.on("before_provider_request", (e) => {
-    const r = stabilizePayload(e);
-    if (r) return r;
-    // 无 CODEBASE 的 Responses API 回退：纯 ID 稳定
-    if (Array.isArray(e.payload?.input)) {
-      const r2 = stabilizeResponsesPayload(e);
-      if (r2) return r2;
+    const p = e.payload;
+    if (!p || typeof p !== "object" || Array.isArray(p)) return;
+
+    if (Array.isArray(p.input)) {
+      // Responses API: cache key + ID 稳定化
+      const next = { ...p };
+      let changed = false;
+
+      const sysText = p.input
+        .filter(i => i?.role === "system" || i?.role === "developer")
+        .map(i => typeof i.content === "string" ? i.content
+                 : Array.isArray(i.content) ? i.content.map(b => b?.text || "").join("\n") : "")
+        .filter(Boolean).join("\n\n");
+      const key = process.env.GSD_HINTS_PROMPT_CACHE_KEY?.trim()
+        || `gsd-hints:${createHash("sha256").update(sysText).digest("hex").slice(0, 24)}`;
+      if (key && next.prompt_cache_key !== key) { next.prompt_cache_key = key; changed = true; }
+
+      const { input, changed: c } = stabilizeResponsesInput(next.input);
+      if (c) { next.input = input; changed = true; }
+
+      return changed ? next : undefined;
+    }
+
+    // Chat/completions: cache key only（猴子补丁已在 context hook 完成）
+    if (Array.isArray(p.messages)) {
+      const sysText = p.messages
+        .filter(m => m.role === "system" || m.role === "developer")
+        .map(m => typeof m.content === "string" ? m.content : "")
+        .filter(Boolean).join("\n");
+      if (!sysText) return;
+      const key = process.env.GSD_HINTS_PROMPT_CACHE_KEY?.trim()
+        || `gsd-hints:${createHash("sha256").update(sysText).digest("hex").slice(0, 24)}`;
+      if (p.prompt_cache_key !== key) {
+        return { ...p, prompt_cache_key: key };
+      }
     }
   });
 
@@ -598,4 +630,76 @@ export default function contextPrunePlugin(pi) {
       }
     }
   });
+}
+
+
+// ===========================================================================
+// 猴子补丁：剥离 CODEBASE + 注入实时文件列表
+// ===========================================================================
+
+/**
+ * projectSystem — 对 messages 数组做 monkey patching：
+ *   1. 从 system/developer 消息中剥离 CODEBASE 动态段
+ *   2. 在最后一条 user 消息末尾追加实时文件列表 notification
+ *
+ * 这是「剥离和伪造历史消息」的活，属于猴子补丁范畴。
+ * 与 before_provider_request 的 Responses API 稳定化职责分离。
+ */
+export function projectSystem(messages, cwd) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+
+  // Clone upfront for safe mutation
+  const result = messages.map(item => {
+    if (typeof item !== "object" || item === null) return item;
+    const c = { ...item };
+    if (Array.isArray(item.content)) c.content = item.content.map(cc => ({ ...cc }));
+    return c;
+  });
+
+  let hasChanges = false;
+
+  // Phase 1: Strip CODEBASE dynamic ranges from system/developer
+  for (const item of result) {
+    if (item.role !== "system" && item.role !== "developer") continue;
+
+    if (typeof item.content === "string") {
+      const r = stripDynamicRanges(item.content);
+      if (r) { item.content = r.stable; hasChanges = true; }
+    } else if (Array.isArray(item.content)) {
+      let blockChanged = false;
+      const newContent = item.content.map(block => {
+        if (block.type === "text" && typeof block.text === "string") {
+          const r = stripDynamicRanges(block.text);
+          if (r) { blockChanged = true; return { ...block, text: r.stable }; }
+        }
+        return block;
+      });
+      if (blockChanged) { item.content = newContent; hasChanges = true; }
+    }
+  }
+
+  // Phase 2: Append file listing notification to last user message (append-only, idempotent)
+  for (let i = result.length - 1; i >= 0; i--) {
+    const m = result[i];
+    if (m.role !== "user") continue;
+
+    // Idempotent: skip if this user already carries a notification
+    const text = typeof m.content === "string" ? m.content
+      : Array.isArray(m.content) ? m.content.map(c => c.text || "").join("\n") : "";
+    if (text.includes("<system-notification>")) break;
+
+    const dir = cwd || codebaseDir;
+    const listing = generateFileListing(dir);
+    const notif = `\n\n<system-notification>\n$ du -hxd1\n${listing || ""}\n</system-notification>`;
+
+    if (typeof m.content === "string") {
+      m.content += notif;
+    } else if (Array.isArray(m.content)) {
+      m.content.push({ type: "text", text: notif.trim() });
+    }
+    hasChanges = true;
+    break;
+  }
+
+  return hasChanges ? result : messages;
 }

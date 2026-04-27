@@ -12,7 +12,8 @@ import contextPrunePlugin, {
   stabilizePayload,
   generateFileListing,
   setCodebaseDir,
-  projectMessages
+  projectMessages,
+  projectSystem
 } from "./index.js";
 
 // ===========================================================================
@@ -318,11 +319,17 @@ test("stabilizePayload: append-only — 每轮在最后一条 user 追加，旧 
   assert.equal(notifCount, 3, "三条 user 共 3 个 notification");
 });
 
-test("stabilizePayload: returns undefined when no CODEBASE", () => {
-  assert.equal(stabilizePayload({ payload: { messages: [
+test("stabilizePayload: returns modified payload with notification when no CODEBASE", () => {
+  const r = stabilizePayload({ payload: { messages: [
     { role: "system", content: "Static.\n\n## Subagent Model\n\nDone." },
     { role: "user", content: "hello" }
-  ]}}), undefined);
+  ]}});
+  assert.ok(r, "should return a payload even without CODEBASE");
+  assert.ok(r.messages[1].content.includes("<system-notification>"), "should inject notification");
+  assert.ok(r.prompt_cache_key?.startsWith("gsd-hints:"), "should set cache key");
+  // system prompt unchanged (no CODEBASE to strip)
+  assert.ok(r.messages[0].content.includes("Static."));
+  assert.ok(r.messages[0].content.includes("## Subagent Model"));
 });
 
 test("stabilizePayload: handles array content user message", () => {
@@ -362,7 +369,7 @@ test("stabilizePayload: preserves other payload fields", () => {
   assert.equal(r.tools[0].function.name, "test");
 });
 
-test("stabilizePayload: before_provider_request — Chat Completions", () => {
+test("before_provider_request — Chat: cache key only, no monkey patching", () => {
   const events = {};
   contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
   const result = events["before_provider_request"]({
@@ -373,30 +380,35 @@ test("stabilizePayload: before_provider_request — Chat Completions", () => {
       ]
     }
   });
+  // before_provider_request 只设 cache key，猴子补丁（CODEBASE 剥离 + notification）在 context hook
   assert.ok(result);
-  assert.ok(!result.messages[0].content.includes("PROJECT CODEBASE"));
-  assert.ok(result.messages[1].content.includes("<system-notification>"));
-  assert.ok(result.prompt_cache_key);
+  assert.ok(result.messages[0].content.includes("PROJECT CODEBASE"), "CODEBASE 不在 before_provider_request 剥离");
+  assert.ok(!result.messages[1].content.includes("<system-notification>"), "notification 不在 before_provider_request 注入");
+  assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
-test("stabilizePayload: before_provider_request — Responses API", () => {
+test("before_provider_request — Responses API: cache key + ID 稳定化", () => {
   const events = {};
   contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
   const result = events["before_provider_request"]({
     payload: { model: "gpt-5", store: false,
       input: [
-        { type: "message", role: "developer", content: [{ type: "text", text: "Static.\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Subagent Model\n\nDone." }] },
-        { type: "message", role: "user", content: [{ type: "text", text: "hello" }] }
+        { role: "system", content: "Static." },
+        { role: "user", content: "hello" },
+        { type: "message", role: "assistant", id: "msg_rnd", content: [] }
       ]
     }
   });
+  // CODEBASE 剥离 + notification 注入在 context hook，不在 before_provider_request
   assert.ok(result);
-  assert.ok(!result.input[0].content[0].text.includes("PROJECT CODEBASE"));
-  assert.ok(result.input[1].content.some(c => c.text?.includes("<system-notification>")), "user 应注入 notification");
-  assert.ok(result.prompt_cache_key);
+  assert.ok(result.input[0].content.includes("Static."), "system content 不变");
+  // ID 稳定化（Responses 专用）
+  assert.ok(result.input[2].id?.startsWith("msg_"), "assistant ID 已稳定化");
+  // cache key
+  assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
-test("stabilizePayload: no CODEBASE + Responses API fallback to ID stabilization", () => {
+test("before_provider_request — Responses API: cache key + ID 无 CODEBASE 场景", () => {
   const events = {};
   contextPrunePlugin({ on: (e, cb) => { events[e] = cb; }, registerTool: () => {}, registerCommand: () => {} });
   const result = events["before_provider_request"]({
@@ -408,10 +420,8 @@ test("stabilizePayload: no CODEBASE + Responses API fallback to ID stabilization
       ]
     }
   });
-  // 无 CODEBASE → stabilizePayload 返回 undefined
-  // 降级到 stabilizeResponsesPayload：ID 稳定化 + prompt_cache_key
   assert.ok(result);
-  assert.ok(result.input[2].id?.startsWith("msg_"), "ID 应被稳定化");
+  assert.ok(result.input[2].id?.startsWith("msg_"), "ID 已稳定化");
   assert.ok(result.prompt_cache_key?.startsWith("gsd-hints:"));
 });
 
@@ -464,6 +474,84 @@ test("projectMessages: passes through with no summaries", () => {
   assert.equal(result.length, 2);
   assert.equal(result[0].role, "user");
   assert.equal(result[1].toolCallId, "call1");
+});
+
+// ===========================================================================
+// projectSystem
+// ===========================================================================
+
+test("projectSystem: strips CODEBASE from system prompt", () => {
+  const msgs = [
+    { role: "system", content: "You are helpful.\n\n[PROJECT CODEBASE — File structure]\n- app.js\n\n## Subagent Model\n\nDone." },
+    { role: "user", content: "hello" }
+  ];
+  setCodebaseDir("/tmp");
+  const r = projectSystem(msgs, "/tmp");
+  assert.ok(r !== msgs, "returns new array when modified");
+  assert.ok(!r[0].content.includes("PROJECT CODEBASE"), "CODEBASE 已剥离");
+  assert.ok(r[0].content.includes("You are helpful"), "system 其他内容保留");
+  assert.ok(r[0].content.includes("## Subagent Model"), "边界标记保留");
+});
+
+test("projectSystem: appends file listing to last user", () => withTmp(dir => {
+  writeFileSync(join(dir, "hello.txt"), "world");
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "first" },
+    { role: "assistant", content: "ok" },
+    { role: "user", content: "last" }
+  ];
+  const r = projectSystem(msgs, dir);
+  assert.ok(r !== msgs, "returns new array");
+  // 最后一条 user 有 notification
+  assert.ok(r[3].content.includes("<system-notification>"), "最后 user 有 notification");
+  assert.ok(r[3].content.includes("$ du -hxd1"), "包含实时文件列表");
+  assert.ok(r[3].content.includes("hello.txt"), "包含目录内容");
+  // 第一条 user 没有 notification
+  assert.ok(!r[1].content.includes("<system-notification>"), "第一条 user 无 notification");
+  // 原始数据不变
+  assert.ok(!msgs[3].content.includes("<system-notification>"));
+}));
+
+test("projectSystem: idempotent — does not re-add notification if already present", () => {
+  const msgs = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "hi\n\n<system-notification>\nAlready here\n</system-notification>" }
+  ];
+  const r = projectSystem(msgs);
+  // 原始数组中已有 notification → 不再追加
+  assert.ok(r === msgs, "returns original array when no changes");
+  assert.equal(r[1].content.match(/<system-notification>/g).length, 1, "notification 不重复");
+});
+
+test("projectSystem: handles array content messages", () => withTmp(dir => {
+  const msgs = [
+    { role: "developer", content: [{ type: "text", text: "Static.\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Subagent Model\n\nDone." }] },
+    { role: "user", content: [{ type: "text", text: "hello" }] }
+  ];
+  const r = projectSystem(msgs, dir);
+  assert.ok(r !== msgs);
+  assert.ok(!r[0].content[0].text.includes("PROJECT CODEBASE"), "array content 中 CODEBASE 已剥离");
+  assert.ok(r[1].content.some(c => c.text?.includes("<system-notification>")), "array content user 有 notification");
+}));
+
+test("projectSystem: preserves non-system messages unchanged", () => {
+  const msgs = [
+    { role: "user", content: "just a user message" },
+    { role: "assistant", content: "assistant reply" }
+  ];
+  // 没有 system/developer, 有 user → 追加 notification, 但 assistant 不变
+  const r = projectSystem(msgs);
+  assert.ok(r !== msgs);
+  assert.equal(r[0].content, msgs[0].content + r[0].content.slice(msgs[0].content.length));
+  assert.equal(r[1].content, "assistant reply", "assistant 消息不变");
+});
+
+test("projectSystem: empty messages returns as-is", () => {
+  const msgs = [];
+  const r = projectSystem(msgs);
+  assert.ok(r === msgs, "same reference for empty array");
+  assert.equal(r.length, 0);
 });
 
 // ===========================================================================
