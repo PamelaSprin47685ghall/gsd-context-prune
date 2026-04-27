@@ -1,4 +1,25 @@
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+
 let summarizerModelId = "default";
+const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
+
+try {
+  if (fs.existsSync(SETTINGS_PATH)) {
+    const data = JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf-8"));
+    if (data.summarizerModelId) summarizerModelId = data.summarizerModelId;
+  }
+} catch (e) {}
+
+function saveSettings() {
+  try {
+    const dir = path.dirname(SETTINGS_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify({ summarizerModelId }));
+  } catch (e) {}
+}
+
 let primarySummaries = [];
 let globalSummary = null;
 let pendingToolCalls = [];
@@ -254,6 +275,7 @@ export default function contextPrunePlugin(pi) {
     handler: async (args, ctx) => {
       if (args.length > 0) {
         summarizerModelId = args[0];
+        saveSettings();
         ctx.ui?.notify(`pruner: 伴随模型已切换为 ${summarizerModelId}`, "info");
       } else {
         ctx.ui?.notify(`pruner: 当前伴随模型为 ${summarizerModelId}。用法: /pruner provider/model-id`, "info");
