@@ -6,12 +6,16 @@ import os from "node:os";
 // gsd-context-prune
 //
 // Pipeline — 每一步做一件事，顺序执行，无 fallback：
-//   stripCodebase → injectListing → stabilizeIds → projectSummaries
+//   before_provider_request: stripCodebase → injectHints → stabilizeIds
+//   context:                injectListing → projectMessages
 // ==========================================================================
 
 const read = p => { try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }};
 
-// ── Step 0: HINTS ─────────────────────────────────────────────────────────
+let listingDir = process.cwd();
+export function setCodebaseDir(d) { listingDir = d; }
+
+// Step 0: HINTS
 
 export function loadHintSources(cwd) {
   const home = process.env.GSD_HOME || path.join(os.homedir(), ".gsd");
@@ -53,7 +57,7 @@ function injectHints(messages) {
   return changed ? out : messages;
 }
 
-// ── Step 1: CODEBASE 剥离 ─────────────────────────────────────────────────
+// Step 1: CODEBASE
 
 const CB_START = "[PROJECT CODEBASE —";
 const CB_STOPS = ["## Subagent Model", "## GSD Skill Preferences", "# Tools", "## Tools"];
@@ -97,7 +101,7 @@ function stripMessages(messages) {
   return changed ? out : messages;
 }
 
-// ── Step 2: 文件列表注入 ────────────────────────────────────────────────────
+// Step 2: File listing
 
 function sizeStr(bytes) {
   if (bytes >= 1e9) return (bytes / 1e9).toFixed(1) + "G";
@@ -129,9 +133,6 @@ export function generateFileListing(dir) {
   } catch { return ""; }
 }
 
-let listingDir = process.cwd();
-export function setCodebaseDir(d) { listingDir = d; }
-
 /** 在最后一条 user 消息追加 <system-notification>（幂等：已有则不重复追加）。 */
 function injectListing(messages) {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -152,7 +153,7 @@ function injectListing(messages) {
   }
   return messages;
 }
-// ── Step 4: ID 剥离（Completions / Responses API）─────────────────────────
+// Step 3: ID stabilization
 
 /** 剥离 assistant message 的 id 和 function_call 的 id/call_id，
  *  这些随机 ID 在 API 回传中无需复用，直接去掉让 provider 自动分配即可。 */
@@ -180,11 +181,9 @@ export function stabilizeIds(input) {
   return changed ? out : input;
 }
 
-// ── Step 5: 摘要投影 ────────────────────────────────────────────────────────
+// Step 4: Summary projection
 
 let summaries = []; // { type:'primary'|'global', ... }
-
-function zeroContent(v) { return []; }
 
 /** 保持结构，把已折叠消息的内容清空为 0 字节，并注入摘要。 */
 export function projectMessages(messages) {
@@ -196,7 +195,7 @@ export function projectMessages(messages) {
       for (const m of result) {
         if (m.role === "toolResult" && ids.has(m.toolCallId || m.id)) {
           if ((m.toolCallId || m.id) === s.latestId) pos = keep.length;
-          keep.push({ ...m, content: zeroContent(m.content) });
+          keep.push({ ...m, content: [] });
           continue;
         }
         keep.push(m);
@@ -229,7 +228,7 @@ export function projectMessages(messages) {
             afterSys++;
             inserted = true;
           }
-          kept.push({ ...m, content: zeroContent(m.content) });
+          kept.push({ ...m, content: [] });
           continue;
         }
         kept.push(m);
@@ -240,7 +239,7 @@ export function projectMessages(messages) {
   return result;
 }
 
-// ── Step 6: 后台总结（sidecar）──────────────────────────────────────────────
+// Step 5: Sidecar summarization
 
 let summarizerModelId = "default";
 const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
@@ -318,11 +317,29 @@ async function triggerGlobalSummary(ctx, pi, projectedMessages) {
   } finally { summarizing = false; }
 }
 
-// ── 统一 Payload Pipeline ──────────────────────────────────────────────────
+// Step 6: Message normalization
+
+/** 规范化消息字段，防止 provider 因格式拒绝请求。
+ *
+ *  - content === null           → ""（某些 provider 不允许 null）
+ *  - assistant 缺 reasoning_content（reasoningEffort 启用时）→ ""
+ */
+export function normalizeMessages(messages, reasoningEffort) {
+  return messages.map(m => {
+    if (!m || typeof m !== "object") return m;
+    const changed = {};
+    if (m.content === null) changed.content = "";
+    if (reasoningEffort && m.role === "assistant" && (m.reasoning_content === undefined || m.reasoning_content === null))
+      changed.reasoning_content = "";
+    return Object.keys(changed).length ? { ...m, ...changed } : m;
+  });
+}
+
+// Unified Payload Pipeline
 
 /**
  * 统一入口：将任意格式的 payload 归一处理。
- * pipeline: stripCodebase → injectListing → stabilizeIds → projectSummaries
+ * pipeline: stripCodebase → injectListing → normalizeMessages → stabilizeIds → projectMessages
  */
 export function stabilizePayload(event) {
   const p = event.payload;
@@ -334,6 +351,7 @@ export function stabilizePayload(event) {
 
   let m = stripMessages(messages);
   m = injectListing(m);
+  m = normalizeMessages(m, p.reasoning_effort);
 
   if (isResponses) {
     const input = stabilizeIds(m);
@@ -397,7 +415,7 @@ export default function contextPrunePlugin(pi) {
     }
   });
 
-  // before_provider_request：CODEBASE 剥离 → HINTS 注入 → ID 稳定化
+  // before_provider_request：CODEBASE 剥离 → HINTS 注入 → ID 稳定化 → 消息规范化
   // 此处 payload 包含完整 system prompt（由 provider 拼入），可以安全操作 system/developer 消息。
   // 注意：必须始终返回 result（即使未变更），否则 PI 框架丢弃返回值使用原始 payload。
   pi.on("before_provider_request", (e) => {
@@ -422,6 +440,13 @@ export default function contextPrunePlugin(pi) {
       if (input !== modified) {
         result = { ...result, input };
       }
+    }
+
+    // 消息规范化：content null 兜底 + reasoning_content 兜底
+    const msgs = isResponses ? result.input : result.messages;
+    const normalized = normalizeMessages(msgs, p.reasoning_effort);
+    if (normalized !== msgs) {
+      result = isResponses ? { ...result, input: normalized } : { ...result, messages: normalized };
     }
 
     return result;

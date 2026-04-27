@@ -71,7 +71,11 @@ $ du -hxd1
 格式复刻 `du -hxd1`：一行一个，`右对齐可读大小  名称`，目录名以 `/` 结尾，**目录的体积是递归总大小**。
 当前目录因 `-d1` 不列出自身总行。列表注入到最后一条 user 消息的 `<system-notification>` 标签中。
 
-**c) Append-only 语义（缓存极致）**
+**c) Provider 兼容性（消息规范化）**
+- `content: null` → 自动修正为 `""`
+- 当 `reasoning_effort` 启用时，缺失 `reasoning_content` 的 assistant 消息自动补 `""`
+
+**d) Append-only 语义（缓存极致）**
 每条 user 消息在它曾是最后一条的那个回合拿到自己的 notification，后续永不删改：
 
 ```
