@@ -462,9 +462,9 @@ export default function contextPrunePlugin(pi) {
 
   pi.registerCommand("pruner", {
     description: "Manage context-prune summarizer model",
-    handler: async (args, ctx) => {
-      if (args.length > 0) {
-        summarizerModelId = args[0];
+    handler: async (arg, ctx) => {
+      if (arg.length > 0) {
+        summarizerModelId = arg;
         saveSettings();
         ctx.ui.notify(`pruner: 伴随模型已切换为 ${summarizerModelId}`, "info");
       } else {
