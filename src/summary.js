@@ -1,0 +1,160 @@
+let summaries = [];
+let pendingToolCalls = [];
+let summarizing = false;
+let summarizerModelId = "default";
+
+export function setSummarizerModelId(id) { summarizerModelId = id; }
+export function getSummarizerModelId() { return summarizerModelId; }
+export function isSummarizing() { return summarizing; }
+export function hasPendingToolCalls() { return pendingToolCalls.length > 0; }
+export function getPendingToolCalls() { return pendingToolCalls; }
+export function resetPendingToolCalls() { pendingToolCalls.length = 0; }
+export function getSummaries() { return summaries; }
+
+export function restoreSummariesFromBranch(branchEntries) {
+  summaries = [];
+  for (const entry of branchEntries || []) {
+    if (entry.type !== "custom") continue;
+    if (entry.customType === "context-prune-primary-data")
+      summaries.push({ type: "primary", ...entry.data, toolCallIds: entry.data.toolCallIds });
+    if (entry.customType === "context-prune-global-data")
+      summaries.push({ type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) });
+  }
+}
+
+export function projectMessages(messages) {
+  let result = messages;
+  for (const s of summaries) {
+    if (s.type === "primary") {
+      const ids = new Set(s.toolCallIds);
+      let pos = -1, keep = [];
+      for (const m of result) {
+        if (m.role === "toolResult" && ids.has(m.toolCallId || m.id)) {
+          if ((m.toolCallId || m.id) === s.latestId) pos = keep.length;
+          keep.push({ ...m, content: [] });
+          continue;
+        }
+        keep.push(m);
+      }
+      if (pos !== -1) {
+        keep[pos] = {
+          ...keep[pos],
+          content: [{ type: "text", text: `【初级精简摘要】\n${s.text}` }]
+        };
+      }
+      result = keep;
+    }
+    if (s.type === "global") {
+      const ids = s.collapsedIds;
+      let kept = [], inserted = false;
+      let afterSys = -1;
+      for (let i = 0; i < result.length; i++) {
+        const m = result[i];
+        if (m.role === "system" || m.role === "developer") {
+          kept.push(m);
+          if (afterSys === -1) afterSys = kept.length;
+          continue;
+        }
+        if (m.id && ids.has(m.id)) {
+          if (!inserted && afterSys !== -1) {
+            kept.splice(afterSys, 0, {
+              id: `global-sum-${s.timestamp}`, role: "assistant",
+              content: [{ type: "text", text: `【高级精简：世界线坍缩】\n${s.text}` }]
+            });
+            afterSys++;
+            inserted = true;
+          }
+          kept.push({ ...m, content: [] });
+          continue;
+        }
+        kept.push(m);
+      }
+      result = kept;
+    }
+  }
+  return result;
+}
+
+function collectToolCallBatches(batches) {
+  return batches.map(b =>
+    `Tool: ${b.name}\nArgs: ${JSON.stringify(b.args)}\nResult: ${(b.result || "").slice(0, 2000)}`
+  ).join("\n\n---\n\n");
+}
+
+export async function triggerPrimarySummary(ctx, pi, batches) {
+  summarizing = true;
+  ctx.ui.notify(`pruner: 正在进行初级精简 (${batches.length} 个工具调用)...`, "info");
+  try {
+    const model = summarizerModelId === "default" ? ctx.model
+      : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
+    const mod = await import("@gsd/pi-ai");
+    const apiKey = await ctx.modelRegistry?.getApiKey(model);
+    const text = collectToolCallBatches(batches);
+    const prompt = "你是一个总结助手。请将以下 AI 工具调用记录浓缩为简短的摘要。\n" +
+      "仅保留：工具名、执行了什么、关键结果（成功/失败及核心数据）、未来需要的发现。\n" +
+      "忽略琐碎的无用输出。\n\n<tool-calls>\n" + text + "\n</tool-calls>";
+    const res = await mod.complete(model, {
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
+    }, { apiKey, headers: model.headers });
+    const summaryText = res.content.map(c => c.text).join("\n");
+    const toolCallIds = batches.map(b => b.id);
+    const latestId = toolCallIds[toolCallIds.length - 1];
+    summaries.push({ type: "primary", toolCallIds, latestId, text: summaryText });
+    pi.appendEntry("context-prune-primary-data", { toolCallIds, latestId, text: summaryText });
+    ctx.ui.notify("pruner: 初级精简完成，工具输出已被折叠。", "success");
+  } catch (err) {
+    ctx.ui.notify(`pruner: 初级精简失败 - ${err.message}`, "error");
+  } finally { summarizing = false; }
+}
+
+function flattenMessages(messages) {
+  return messages.map(m => {
+    const c = Array.isArray(m.content) ? m.content.map(x => x.text || JSON.stringify(x)).join("\n")
+      : typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    return `[${m.role}] ${c}`;
+  }).join("\n\n");
+}
+
+export async function triggerGlobalSummary(ctx, pi, projectedMessages) {
+  summarizing = true;
+  ctx.ui.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
+  try {
+    const model = summarizerModelId === "default" ? ctx.model
+      : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
+    const mod = await import("@gsd/pi-ai");
+    const apiKey = await ctx.modelRegistry?.getApiKey(model);
+    const text = flattenMessages(projectedMessages);
+    const prompt = "请将以下所有的对话与执行历史，浓缩总结为\"问题背景\"和\"当前进度\"。\n" +
+      "保留当前正在执行的任务目标、已确认的约束和接下来需要做的事情。\n" +
+      "丢弃琐碎的尝试过程。\n\n<history>\n" + text + "\n</history>";
+    const res = await mod.complete(model, {
+      messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
+    }, { apiKey, headers: model.headers });
+    const summaryText = res.content.map(c => c.text).join("\n");
+    const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
+    summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
+    pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
+    ctx.ui.notify("pruner: 高级精简完成，历史已被折叠。", "success");
+  } catch (err) {
+    ctx.ui.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
+  } finally { summarizing = false; }
+}
+
+export function collectToolCall(event) {
+  const content = Array.isArray(event.message?.content) ? event.message.content : [];
+  const toolCalls = content.filter(b => b.type === "toolCall") || [];
+  const toolResults = event.toolResults || [];
+  for (const tc of toolCalls) {
+    const id = tc.id || tc.toolCallId;
+    const res = toolResults.find(r => r.toolCallId === id || r.id === id);
+    if (res) {
+      pendingToolCalls.push({
+        id, name: tc.name || tc.toolName,
+        args: tc.arguments || tc.args || tc.input || {},
+        result: Array.isArray(res.content)
+          ? res.content.map(c => c.text || JSON.stringify(c)).join("\n")
+          : String(res.content || "")
+      });
+    }
+  }
+}
