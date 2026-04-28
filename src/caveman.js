@@ -5,7 +5,7 @@ const MARKER = "[思维与表达]";
 export function buildCavemanBlock() {
   return `${MARKER}
 ## 规则
-- 必须<think>极简中文</think>，严禁 <think>English ...</think>。
+- <think /> 内容必须以<think>好的，...</think>开头。
 - 弃虚词：了/的/呢/吗/吧/啊/哦/呀/哈
 - 弃客套：请/谢谢/没问题/好的/可以
 - 弃填充：这个/那个/其实/所以/然后/就是
