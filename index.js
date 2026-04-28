@@ -9,42 +9,27 @@ export default function contextPrunePlugin(pi) {
   const sz = createSummarizer();
   sz.setSummarizerModelId(loadDefaultModelId());
 
-  const handleSessionChange = (ctx) => {
+  const handleSessionChange = (eventType, ctx) => {
     sz.restoreSummariesFromBranch(ctx?.sessionManager?.getBranch?.());
     sz.resetPendingToolCalls();
+    
+    const messages = {
+      session_start: "已加载",
+      session_switch: "已切换会话",
+      session_fork: "已分叉会话",
+      session_tree: "已树形切换会话"
+    };
+    
+    ctx.ui.notify(
+      `pruner: ${messages[eventType]}。伴随模型 ${sz.getSummarizerModelId()}，会话摘要 ${sz.getSummaries().length} 条已恢复。`,
+      "info"
+    );
   };
 
-  pi.on("session_start", (_event, ctx) => {
-    handleSessionChange(ctx);
-    ctx.ui.notify(
-      `pruner: 已加载。伴随模型 ${sz.getSummarizerModelId()}，会话摘要 ${sz.getSummaries().length} 条已恢复。`,
-      "info"
-    );
-  });
-
-  pi.on("session_switch", (_event, ctx) => {
-    handleSessionChange(ctx);
-    ctx.ui.notify(
-      `pruner: 已切换会话。伴随模型 ${sz.getSummarizerModelId()}，会话摘要 ${sz.getSummaries().length} 条已恢复。`,
-      "info"
-    );
-  });
-
-  pi.on("session_fork", (_event, ctx) => {
-    handleSessionChange(ctx);
-    ctx.ui.notify(
-      `pruner: 已分叉会话。伴随模型 ${sz.getSummarizerModelId()}，会话摘要 ${sz.getSummaries().length} 条已恢复。`,
-      "info"
-    );
-  });
-
-  pi.on("session_tree", (_event, ctx) => {
-    handleSessionChange(ctx);
-    ctx.ui.notify(
-      `pruner: 已树形切换会话。伴随模型 ${sz.getSummarizerModelId()}，会话摘要 ${sz.getSummaries().length} 条已恢复。`,
-      "info"
-    );
-  });
+  const sessionEvents = ["session_start", "session_switch", "session_fork", "session_tree"];
+  for (const event of sessionEvents) {
+    pi.on(event, (_event, ctx) => handleSessionChange(event, ctx));
+  }
 
   pi.on("before_agent_start", (event, ctx) => {
     const { systemPrompt, errors } = buildStablePrompt(event.systemPrompt);
