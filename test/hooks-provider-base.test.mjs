@@ -66,3 +66,20 @@ test("before_provider_request — Messages API: preserves prompt_cache_key", () 
   assert.ok(result);
   assert.equal(result.prompt_cache_key, "session_xyz");
 });
+
+test("before_provider_request: only injects reasoning_content for assistant messages", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "test",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi" }
+      ]
+    }
+  });
+  assert.equal("reasoning_content" in result.messages[0], false);
+  assert.equal("reasoning_content" in result.messages[1], false);
+  assert.equal(result.messages[2].reasoning_content, "");
+});

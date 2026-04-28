@@ -12,10 +12,39 @@ export { generateFileListing, projectMessages, loadHintSources, buildHintsBlock 
 export default function contextPrunePlugin(pi) {
   setSummarizerModelId(loadDefaultModelId());
 
-  pi.on("session_start", (_event, ctx) => {
+  const handleSessionChange = (ctx) => {
     restoreSummariesFromBranch(ctx?.sessionManager?.getBranch?.());
+    resetPendingToolCalls();
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    handleSessionChange(ctx);
     ctx.ui.notify(
       `pruner: 已加载。伴随模型 ${getSummarizerModelId()}，会话摘要 ${getSummaries().length} 条已恢复。`,
+      "info"
+    );
+  });
+
+  pi.on("session_switch", (_event, ctx) => {
+    handleSessionChange(ctx);
+    ctx.ui.notify(
+      `pruner: 已切换会话。伴随模型 ${getSummarizerModelId()}，会话摘要 ${getSummaries().length} 条已恢复。`,
+      "info"
+    );
+  });
+
+  pi.on("session_fork", (_event, ctx) => {
+    handleSessionChange(ctx);
+    ctx.ui.notify(
+      `pruner: 已分叉会话。伴随模型 ${getSummarizerModelId()}，会话摘要 ${getSummaries().length} 条已恢复。`,
+      "info"
+    );
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    handleSessionChange(ctx);
+    ctx.ui.notify(
+      `pruner: 已树形切换会话。伴随模型 ${getSummarizerModelId()}，会话摘要 ${getSummaries().length} 条已恢复。`,
       "info"
     );
   });
@@ -67,11 +96,11 @@ export default function contextPrunePlugin(pi) {
     const p = e.payload;
     if (!p) return p;
 
-    // Ensure every message has a reasoning_content field so providers don't choke
+    // Ensure every assistant message has a reasoning_content field so providers don't choke
     const msgs = 'input' in p ? p.input : p.messages;
     if (Array.isArray(msgs))
       for (const m of msgs)
-        if (m && typeof m === 'object' && !('reasoning_content' in m))
+        if (m && typeof m === 'object' && m.role === 'assistant' && !('reasoning_content' in m))
           m.reasoning_content = "";
 
     // Strip random sessionId so same content hits same cache across sessions
