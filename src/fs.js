@@ -1,6 +1,10 @@
 import fs from "node:fs";
+import path from "node:path";
 
-let _listingCache = { dir: null, mtime: 0, listing: "" };
+let _listingCache = { dir: null, mtime: 0, count: 0, listing: "" };
+
+const MAX_DEPTH = 10;
+const MAX_FILES = 10000;
 
 export function readFile(p) {
   try {
@@ -17,13 +21,17 @@ function sizeStr(bytes) {
   return bytes >= 1024 ? (bytes / 1024).toFixed(1) + "K" : bytes + "B";
 }
 
-function dirSize(dir, depth = 0) {
-  if (depth > 5) return 0;
+function dirSize(dir, depth = 0, state = { count: 0 }) {
+  if (depth > MAX_DEPTH || state.count > MAX_FILES) return 0;
   try {
     return fs.readdirSync(dir, { withFileTypes: true })
       .reduce((sum, item) => {
-        const fp = dir + "/" + item.name;
-        try { return sum + (fs.statSync(fp).isDirectory() ? dirSize(fp, depth + 1) : fs.statSync(fp).size); } catch { return sum; }
+        if (state.count > MAX_FILES) return sum;
+        const fp = path.join(dir, item.name);
+        try {
+          state.count++;
+          return sum + (fs.statSync(fp).isDirectory() ? dirSize(fp, depth + 1, state) : fs.statSync(fp).size);
+        } catch { return sum; }
       }, 0);
   } catch { return 0; }
 }
@@ -31,11 +39,16 @@ function dirSize(dir, depth = 0) {
 export function generateFileListing(dir) {
   try {
     const dirStat = fs.statSync(dir);
-    if (_listingCache.dir === dir && dirStat.mtimeMs <= _listingCache.mtime)
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    const count = entries.length;
+    
+    if (_listingCache.dir === dir && 
+        dirStat.mtimeMs <= _listingCache.mtime && 
+        count === _listingCache.count)
       return _listingCache.listing;
 
-    const listing = fs.readdirSync(dir, { withFileTypes: true }).map(item => {
-      const fp = dir + "/" + item.name;
+    const listing = entries.map(item => {
+      const fp = path.join(dir, item.name);
       try {
         const st = fs.statSync(fp);
         const sz = st.isDirectory() ? dirSize(fp) : st.size;
@@ -43,7 +56,7 @@ export function generateFileListing(dir) {
       } catch { return ""; }
     }).filter(Boolean).join("\n");
 
-    _listingCache = { dir, mtime: dirStat.mtimeMs, listing };
+    _listingCache = { dir, mtime: dirStat.mtimeMs, count, listing };
     return listing;
   } catch { return ""; }
 }

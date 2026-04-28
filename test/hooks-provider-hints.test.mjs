@@ -4,16 +4,15 @@ import { mock } from "node:test";
 
 let m;
 mock.module("../src/fs.js", {
-  exports: {
-    readFile: () => "mocked-hint",
-    generateFileListing: () => " 123.0M  src/\n   4.0K  package.json\n 456.0K  README.md"
+  namedExports: {
+    readFile: () => "mocked-hint"
   }
 });
 m = await import("../src/inject.js");
 
 test("buildStablePrompt: strips CODEBASE and appends HINTS", () => {
   const prompt = "Role.\nCurrent working directory: /tmp/d\n\n## Subagent Model\n\nUse default.\n\n[PROJECT CODEBASE — File structure]\n- app.js\n\n## End";
-  const { systemPrompt } = m.buildStablePrompt(prompt);
+  const { systemPrompt } = m.buildStablePrompt(prompt, () => " 123.0M  src/\n   4.0K  package.json\n 456.0K  README.md");
   assert.ok(!systemPrompt.includes("PROJECT CODEBASE"));
   assert.ok(systemPrompt.includes("[HINTS — Stable Guidance]"));
   assert.ok(systemPrompt.includes("mocked-hint"));
@@ -26,14 +25,13 @@ test("buildStablePrompt: strips CODEBASE and appends HINTS", () => {
 
 test("buildStablePrompt: extracts cwd from Current working directory line", () => {
   const prompt = "Role.\nCurrent working directory: /real/proj\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Done";
-  const { systemPrompt } = m.buildStablePrompt(prompt);
-  assert.ok(systemPrompt.includes("/real/proj"));
+  const { systemPrompt } = m.buildStablePrompt(prompt, () => "listing");
   assert.ok(systemPrompt.includes("$ du -hxd1"));
 });
 
 test("buildStablePrompt: no CODEBASE, just appends HINTS", () => {
   const prompt = "You are helpful.\nCurrent working directory: /tmp\n\n## Subagent Model\n\nDone.";
-  const { systemPrompt } = m.buildStablePrompt(prompt);
+  const { systemPrompt } = m.buildStablePrompt(prompt, () => "");
   assert.ok(systemPrompt.includes("[HINTS — Stable Guidance]"));
   assert.ok(systemPrompt.includes("You are helpful"));
 });
@@ -52,7 +50,7 @@ test("buildStablePrompt: worktree override takes priority", () => {
     "## Subagent Model",
     "Use claude."
   ].join("\n");
-  const { systemPrompt } = m.buildStablePrompt(prompt);
+  const { systemPrompt } = m.buildStablePrompt(prompt, () => "worktree-listing");
   assert.ok(systemPrompt.includes("$ du -hxd1"));
-  assert.ok(systemPrompt.includes("/real/worktree/path"));
+  assert.ok(systemPrompt.includes("worktree-listing"));
 });

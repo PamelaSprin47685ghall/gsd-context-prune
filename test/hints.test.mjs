@@ -6,7 +6,7 @@ let m;
 let hintValues;
 let existsPaths;
 mock.module("../src/fs.js", {
-  exports: {
+  namedExports: {
     readFile: (p) => {
       if (typeof hintValues !== "undefined") return hintValues.shift() ?? "";
       return "";
@@ -16,13 +16,13 @@ mock.module("../src/fs.js", {
 });
 // Mock existsSync to control which project path "exists"
 mock.module("node:fs", {
-  exports: {
+  namedExports: {
     existsSync: (p) => Array.isArray(existsPaths) ? existsPaths.includes(p) : false,
     statSync: () => ({ isFile: () => true }),
     readFileSync: () => ""
   }
 });
-m = await import("../index.js");
+m = await import("../src/inject.js");
 
 test("loadHintSources: loads global and project hints", () => {
   hintValues = ["global", "project"];

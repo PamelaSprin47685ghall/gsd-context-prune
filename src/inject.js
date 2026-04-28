@@ -1,7 +1,7 @@
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
-import { readFile, generateFileListing } from "./fs.js";
+import { readFile } from "./fs.js";
 
 export function loadHintSources(cwd) {
   const home = process.env.GSD_HOME || path.join(os.homedir(), ".gsd");
@@ -47,7 +47,7 @@ export function buildHintsBlock(cwd) {
   return { block, errors };
 }
 
-export function buildStablePrompt(systemPrompt) {
+export function buildStablePrompt(systemPrompt, generateFileListing) {
   let cwd = null;
   let skipCodebase = false;
   const out = [];
@@ -72,7 +72,7 @@ export function buildStablePrompt(systemPrompt) {
   }
 
   const { block, errors } = buildHintsBlock(cwd);
-  const listing = cwd ? generateFileListing(cwd) : "";
+  const listing = cwd && generateFileListing ? generateFileListing(cwd) : "";
   const listingBlock = listing ? `\n$ du -hxd1\n${listing}\n` : "";
   return { systemPrompt: out.join("\n") + "\n\n" + block + listingBlock, errors };
 }

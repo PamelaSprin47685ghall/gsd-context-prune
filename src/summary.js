@@ -141,31 +141,39 @@ export function createSummarizer() {
   }
 
   async function triggerGlobalSummary(ctx, pi, projectedMessages) {
-    if (!tryStartSummarizing()) {
-      ctx.ui.notify("pruner: 上一轮精简仍在进行中，跳过本次全局精简。", "info");
-      return;
-    }
-    ctx.ui.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
-    try {
-      const model = state.summarizerModelId === "default" ? ctx.model
-        : ctx.modelRegistry?.find(...state.summarizerModelId.split("/")) || ctx.model;
-      const mod = await import("@gsd/pi-ai");
-      const apiKey = await ctx.modelRegistry?.getApiKey(model);
-      const text = flattenMessages(projectedMessages);
-      const prompt = "请将以下所有的对话与执行历史，浓缩总结为\"问题背景\"和\"当前进度\"。\n" +
-        "保留当前正在执行的任务目标、已确认的约束和接下来需要做的事情。\n" +
-        "丢弃琐碎的尝试过程。\n\n<history>\n" + text + "\n</history>";
-      const res = await mod.complete(model, {
-        messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
-      }, { apiKey, headers: model.headers });
-      const summaryText = res.content.map(c => c.text).join("\n");
-      const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
-      state.summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
-      pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
-      ctx.ui.notify("pruner: 高级精简完成，历史已被折叠。", "success");
-    } catch (err) {
-      ctx.ui.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
-    } finally { state.summarizing = false; }
+    state.summaryQueue = state.summaryQueue.then(async () => {
+      if (!tryStartSummarizing()) {
+        ctx?.ui?.notify("pruner: 上一轮精简仍在进行中，跳过本次全局精简。", "info");
+        return;
+      }
+      ctx?.ui?.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
+      try {
+        const model = state.summarizerModelId === "default" ? ctx.model
+          : ctx.modelRegistry?.find(...state.summarizerModelId.split("/")) || ctx.model;
+        let mod;
+        try {
+          mod = await import("@gsd/pi-ai");
+        } catch (err) {
+          ctx?.ui?.notify(`pruner: 无法加载 @gsd/pi-ai 模块 - ${err.message}`, "error");
+          return;
+        }
+        const apiKey = await ctx.modelRegistry?.getApiKey(model);
+        const text = flattenMessages(projectedMessages);
+        const prompt = "请将以下所有的对话与执行历史，浓缩总结为\"问题背景\"和\"当前进度\"。\n" +
+          "保留当前正在执行的任务目标、已确认的约束和接下来需要做的事情。\n" +
+          "丢弃琐碎的尝试过程。\n\n<history>\n" + text + "\n</history>";
+        const res = await mod.complete(model, {
+          messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
+        }, { apiKey, headers: model.headers });
+        const summaryText = res.content.map(c => c.text).join("\n");
+        const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
+        state.summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
+        pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
+        ctx?.ui?.notify("pruner: 高级精简完成，历史已被折叠。", "success");
+      } catch (err) {
+        ctx?.ui?.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
+      } finally { state.summarizing = false; }
+    });
   }
 
   function collectToolCall(event) {

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mock } from "node:test";
 
 mock.module("../src/fs.js", {
-  exports: {
+  namedExports: {
     readFile: () => "",
     generateFileListing: (dir) => {
       if (dir === "/nonexistent") return "";

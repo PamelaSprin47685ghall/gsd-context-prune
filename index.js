@@ -121,14 +121,14 @@ export default function contextPrunePlugin(pi) {
       if (arg.length > 0) {
         sz.setSummarizerModelId(arg);
         const saved = saveModelId(arg);
-        ctx.ui.notify(
+        ctx?.ui?.notify(
           saved
             ? `pruner: 伴随模型已切换为 ${arg}`
             : `pruner: 模型已切换为 ${arg}，但持久化失败`,
           saved ? "info" : "warning"
         );
       } else {
-        ctx.ui.notify(`pruner: 当前伴随模型为 ${sz.getSummarizerModelId()}。用法: /pruner provider/model - id`, "info");
+        ctx?.ui?.notify(`pruner: 当前伴随模型为 ${sz.getSummarizerModelId()}。用法: /pruner provider/model-id`, "info");
       }
     }
   });
