@@ -122,7 +122,7 @@ export default function contextPrunePlugin(pi) {
 
     modified = [
       ...modified,
-      { role: "system", content: `<think>${buildCavemanReminder()}</think>` }
+      { role: "system", content: `<think>${buildCavemanBlock()}</think>` }
     ]
 
     let result = p;
