@@ -120,13 +120,6 @@ export default function contextPrunePlugin(pi) {
     modified = injectCavemanBlock(modified);
     modified = injectHints(modified, getCodebaseDir());
 
-    modified = [
-      ...modified,
-      {
-        role: "system", content: `${buildCavemanBlock()}就像这样：<think>${buildCavemanBlock()}</think>`
-      }
-    ]
-
     let result = p;
     if (modified !== messages) {
       result = isResponses ? { ...result, input: modified } : { ...result, messages: modified };
