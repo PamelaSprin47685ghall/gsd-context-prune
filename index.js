@@ -80,13 +80,10 @@ export default function contextPrunePlugin(pi) {
     const msgs = 'input' in p ? p.input : p.messages;
     if (!Array.isArray(msgs)) return p;
 
-    const model = p.model || "";
-    const isAnthropic = /claude/i.test(model) || /anthropic/i.test(p.provider || "");
-
     const shallow = msgs.map(m => (m && typeof m === "object") ? { ...m } : m);
     if ("input" in p) p.input = shallow; else p.messages = shallow;
 
-    if (!isAnthropic) {
+    if (/deepseek/i.test(p.model || "")) {
       for (const m of shallow)
         if (m && m.role === "assistant" && !("reasoning_content" in m))
           m.reasoning_content = "";
