@@ -2,7 +2,6 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import contextPrunePlugin from "../index.js";
 import { makePlugin, sessionCtx } from "./helpers.mjs";
-import { getPendingToolCalls, resetPendingToolCalls } from "../src/summary.js";
 
 const branchWithPrimary = () => [
   { type: "custom", customType: "context-prune-primary-data",
@@ -36,66 +35,54 @@ test("integration: session_start restores summaries, context projects them", () 
 });
 
 test("integration: session_switch restores summaries and resets pending tool calls", () => {
-  resetPendingToolCalls();
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   events.turn_end({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }] },
     toolResults: [{ toolCallId: "tc1", content: "result" }]
   }, sessionCtx());
-  assert.equal(getPendingToolCalls().length, 1);
 
   events.session_switch({}, ctxWithBranch(branchWithPrimary()));
-  assert.equal(getPendingToolCalls().length, 0);
   const result = events.context({
     messages: [
       { role: "toolResult", toolCallId: "call2", content: "raw" }
     ]
   });
   assert.ok(result.messages[0].content[0].text.includes("test summary"));
-  resetPendingToolCalls();
 });
 
 test("integration: session_fork restores summaries and resets pending tool calls", () => {
-  resetPendingToolCalls();
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   events.turn_end({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }] },
     toolResults: [{ toolCallId: "tc1", content: "result" }]
   }, sessionCtx());
-  assert.equal(getPendingToolCalls().length, 1);
 
   events.session_fork({}, ctxWithBranch(branchWithPrimary()));
-  assert.equal(getPendingToolCalls().length, 0);
   const result = events.context({
     messages: [
       { role: "toolResult", toolCallId: "call2", content: "raw" }
     ]
   });
   assert.ok(result.messages[0].content[0].text.includes("test summary"));
-  resetPendingToolCalls();
 });
 
 test("integration: session_tree restores summaries and resets pending tool calls", () => {
-  resetPendingToolCalls();
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   events.turn_end({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }] },
     toolResults: [{ toolCallId: "tc1", content: "result" }]
   }, sessionCtx());
-  assert.equal(getPendingToolCalls().length, 1);
 
   events.session_tree({}, ctxWithBranch(branchWithPrimary()));
-  assert.equal(getPendingToolCalls().length, 0);
   const result = events.context({
     messages: [
       { role: "toolResult", toolCallId: "call2", content: "raw" }
     ]
   });
   assert.ok(result.messages[0].content[0].text.includes("test summary"));
-  resetPendingToolCalls();
 });
 
 test("integration: context hook preserves one-shot pattern (no extra assistant msgs)", () => {

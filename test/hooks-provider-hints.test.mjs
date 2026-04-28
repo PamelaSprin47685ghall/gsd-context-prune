@@ -13,29 +13,29 @@ m = await import("../src/inject.js");
 
 test("buildStablePrompt: strips CODEBASE and appends HINTS", () => {
   const prompt = "Role.\nCurrent working directory: /tmp/d\n\n## Subagent Model\n\nUse default.\n\n[PROJECT CODEBASE — File structure]\n- app.js\n\n## End";
-  const r = m.buildStablePrompt(prompt);
-  assert.ok(!r.includes("PROJECT CODEBASE"));
-  assert.ok(r.includes("[HINTS — Stable Guidance]"));
-  assert.ok(r.includes("mocked-hint"));
-  assert.ok(r.includes("Role."));
-  assert.ok(r.includes("## End"));
-  assert.ok(r.includes("$ du -hxd1"));
-  assert.ok(r.includes("src/"));
-  assert.ok(r.includes("package.json"));
+  const { systemPrompt } = m.buildStablePrompt(prompt);
+  assert.ok(!systemPrompt.includes("PROJECT CODEBASE"));
+  assert.ok(systemPrompt.includes("[HINTS — Stable Guidance]"));
+  assert.ok(systemPrompt.includes("mocked-hint"));
+  assert.ok(systemPrompt.includes("Role."));
+  assert.ok(systemPrompt.includes("## End"));
+  assert.ok(systemPrompt.includes("$ du -hxd1"));
+  assert.ok(systemPrompt.includes("src/"));
+  assert.ok(systemPrompt.includes("package.json"));
 });
 
 test("buildStablePrompt: extracts cwd from Current working directory line", () => {
   const prompt = "Role.\nCurrent working directory: /real/proj\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Done";
-  const r = m.buildStablePrompt(prompt);
-  assert.ok(r.includes("/real/proj"));
-  assert.ok(r.includes("$ du -hxd1"));
+  const { systemPrompt } = m.buildStablePrompt(prompt);
+  assert.ok(systemPrompt.includes("/real/proj"));
+  assert.ok(systemPrompt.includes("$ du -hxd1"));
 });
 
 test("buildStablePrompt: no CODEBASE, just appends HINTS", () => {
   const prompt = "You are helpful.\nCurrent working directory: /tmp\n\n## Subagent Model\n\nDone.";
-  const r = m.buildStablePrompt(prompt);
-  assert.ok(r.includes("[HINTS — Stable Guidance]"));
-  assert.ok(r.includes("You are helpful"));
+  const { systemPrompt } = m.buildStablePrompt(prompt);
+  assert.ok(systemPrompt.includes("[HINTS — Stable Guidance]"));
+  assert.ok(systemPrompt.includes("You are helpful"));
 });
 
 test("buildStablePrompt: worktree override takes priority", () => {
@@ -52,7 +52,7 @@ test("buildStablePrompt: worktree override takes priority", () => {
     "## Subagent Model",
     "Use claude."
   ].join("\n");
-  const r = m.buildStablePrompt(prompt);
-  assert.ok(r.includes("$ du -hxd1"));
-  assert.ok(r.includes("/real/worktree/path"));
+  const { systemPrompt } = m.buildStablePrompt(prompt);
+  assert.ok(systemPrompt.includes("$ du -hxd1"));
+  assert.ok(systemPrompt.includes("/real/worktree/path"));
 });

@@ -1,18 +1,34 @@
 import path from "node:path";
 import os from "node:os";
+import fs from "node:fs";
 import { readFile, generateFileListing } from "./fs.js";
-
-// ─── HINTS loading ───────────────────────────────────────────────────
 
 export function loadHintSources(cwd) {
   const home = process.env.GSD_HOME || path.join(os.homedir(), ".gsd");
-  const g = readFile(path.join(home, "HINTS.md"));
-  const out = g ? [{ label: "Global", path: path.join(home, "HINTS.md"), content: g }] : [];
-  if (cwd) {
-    const p = readFile(path.join(cwd, ".gsd", "HINTS.md")) || readFile(path.join(cwd, "HINTS.md"));
-    if (p) out.push({ label: "Project", path: "", content: p });
+  const sources = [];
+  const errors = [];
+
+  try {
+    const g = readFile(path.join(home, "HINTS.md"));
+    if (g) sources.push({ label: "Global", path: path.join(home, "HINTS.md"), content: g });
+  } catch (err) {
+    errors.push(`Global HINTS: ${err.message}`);
   }
-  return out;
+
+  if (cwd) {
+    try {
+      const found = [path.join(cwd, ".gsd", "HINTS.md"), path.join(cwd, "HINTS.md")]
+        .find(p => fs.existsSync(p));
+      if (found) {
+        const content = readFile(found);
+        if (content) sources.push({ label: "Project", path: "", content });
+      }
+    } catch (err) {
+      errors.push(`Project HINTS: ${err.message}`);
+    }
+  }
+
+  return { sources, errors };
 }
 
 function contextPruneHint() {
@@ -24,13 +40,12 @@ function contextPruneHint() {
 }
 
 export function buildHintsBlock(cwd) {
-  const s = loadHintSources(cwd);
-  const parts = [contextPruneHint(), ...s.map(x => `## ${x.label} HINTS (${x.path})\n\n${x.content}`)];
-  return `[HINTS — Stable Guidance]\n\nThese instructions come from HINTS.md files and are intentionally injected into the stable system prompt.\n\n${
+  const { sources, errors } = loadHintSources(cwd);
+  const parts = [contextPruneHint(), ...sources.map(x => `## ${x.label} HINTS (${x.path})\n\n${x.content}`)];
+  const block = `[HINTS — Stable Guidance]\n\nThese instructions come from HINTS.md files and are intentionally injected into the stable system prompt.\n\n${
     parts.join("\n\n")}`;
+  return { block, errors };
 }
-
-// ─── System prompt injection ─────────────────────────────────────────
 
 export function buildStablePrompt(systemPrompt) {
   let cwd = null;
@@ -43,14 +58,12 @@ export function buildStablePrompt(systemPrompt) {
       continue;
     }
     if (skipCodebase) {
-      // End of CODEBASE: next section marker restores normal flow
       if (line.startsWith("[") || line.startsWith("## ")) {
         skipCodebase = false;
         out.push(line);
       }
       continue;
     }
-    // Extract cwd while we pass through
     const wt = /The actual current working directory is: (.+)/.exec(line);
     if (wt) cwd = wt[1].trim();
     const cd = /Current working directory: (.+)/.exec(line);
@@ -58,8 +71,8 @@ export function buildStablePrompt(systemPrompt) {
     out.push(line);
   }
 
-  const hints = buildHintsBlock(cwd);
+  const { block, errors } = buildHintsBlock(cwd);
   const listing = cwd ? generateFileListing(cwd) : "";
   const listingBlock = listing ? `\n$ du -hxd1\n${listing}\n` : "";
-  return out.join("\n") + "\n\n" + hints + listingBlock;
+  return { systemPrompt: out.join("\n") + "\n\n" + block + listingBlock, errors };
 }

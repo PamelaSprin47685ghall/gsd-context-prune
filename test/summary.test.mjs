@@ -1,20 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { projectMessages } from "../index.js";
-import {
-  collectToolCall, restoreSummariesFromBranch, getSummaries,
-  getPendingToolCalls, resetPendingToolCalls, hasPendingToolCalls
-} from "../src/summary.js";
+import { createSummarizer } from "../index.js";
 
-function resetAll() {
-  resetPendingToolCalls();
-  restoreSummariesFromBranch([]);
+function makeSummarizer() {
+  const sz = createSummarizer();
+  const resetAll = () => {
+    sz.resetPendingToolCalls();
+    sz.restoreSummariesFromBranch([]);
+  };
+  return { sz, resetAll };
 }
 
 // ── projectMessages ──
 
 test("projectMessages: passes through with no summaries", () => {
-  const result = projectMessages([
+  const { sz, resetAll } = makeSummarizer();
+  const result = sz.projectMessages([
     { role: "user", content: "hello" },
     { role: "toolResult", toolCallId: "call1", content: "result1" }
   ]);
@@ -22,13 +23,14 @@ test("projectMessages: passes through with no summaries", () => {
 });
 
 test("projectMessages: collapses matched toolResults with multiple primary summaries", () => {
-  restoreSummariesFromBranch([
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-primary-data",
       data: { toolCallIds: ["c1", "c2"], latestId: "c2", text: "sum1" } },
     { type: "custom", customType: "context-prune-primary-data",
       data: { toolCallIds: ["c3", "c4"], latestId: "c4", text: "sum2" } }
   ]);
-  const result = projectMessages([
+  const result = sz.projectMessages([
     { role: "user", content: "hi" },
     { role: "toolResult", toolCallId: "c1", content: "x" },
     { role: "toolResult", toolCallId: "c2", content: "y" },
@@ -44,11 +46,12 @@ test("projectMessages: collapses matched toolResults with multiple primary summa
 });
 
 test("projectMessages: projects global summary with collapsed msg IDs", () => {
-  restoreSummariesFromBranch([
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-global-data",
       data: { collapsedIds: ["msg1", "msg2"], text: "global summary", timestamp: 1000 } }
   ]);
-  const result = projectMessages([
+  const result = sz.projectMessages([
     { role: "system", content: "sys" },
     { id: "msg1", role: "user", content: "a" },
     { id: "msg2", role: "assistant", content: "b" },
@@ -64,11 +67,12 @@ test("projectMessages: projects global summary with collapsed msg IDs", () => {
 });
 
 test("projectMessages: ignores unmatched summary IDs", () => {
-  restoreSummariesFromBranch([
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-primary-data",
       data: { toolCallIds: ["nonexistent"], latestId: "nonexistent", text: "ghost" } }
   ]);
-  const result = projectMessages([
+  const result = sz.projectMessages([
     { role: "user", content: "hi" },
     { role: "toolResult", toolCallId: "real1", content: "real" }
   ]);
@@ -78,11 +82,12 @@ test("projectMessages: ignores unmatched summary IDs", () => {
 });
 
 test("projectMessages: handles messages without toolCallId", () => {
-  restoreSummariesFromBranch([
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-primary-data",
       data: { toolCallIds: ["c1"], latestId: "c1", text: "s" } }
   ]);
-  const result = projectMessages([
+  const result = sz.projectMessages([
     { role: "toolResult", content: "no id" }
   ]);
   assert.equal(result.length, 1);
@@ -93,70 +98,70 @@ test("projectMessages: handles messages without toolCallId", () => {
 // ── collectToolCall ──
 
 test("collectToolCall: collects matching tool calls from event", () => {
-  resetAll();
-  collectToolCall({
+  const { sz, resetAll } = makeSummarizer();
+  sz.collectToolCall({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "x" } }] },
     toolResults: [{ toolCallId: "tc1", content: [{ type: "text", text: "result" }] }]
   });
-  assert.equal(hasPendingToolCalls(), true);
-  assert.equal(getPendingToolCalls().length, 1);
-  assert.equal(getPendingToolCalls()[0].id, "tc1");
-  assert.equal(getPendingToolCalls()[0].name, "read");
+  assert.equal(sz.hasPendingToolCalls(), true);
+  assert.equal(sz.getPendingToolCalls().length, 1);
+  assert.equal(sz.getPendingToolCalls()[0].id, "tc1");
+  assert.equal(sz.getPendingToolCalls()[0].name, "read");
   resetAll();
 });
 
 test("collectToolCall: skips when no tool results match", () => {
-  resetAll();
-  collectToolCall({
+  const { sz, resetAll } = makeSummarizer();
+  sz.collectToolCall({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }] },
     toolResults: []
   });
-  assert.equal(hasPendingToolCalls(), false);
+  assert.equal(sz.hasPendingToolCalls(), false);
   resetAll();
 });
 
 test("collectToolCall: handles missing message content", () => {
-  resetAll();
-  collectToolCall({ message: {}, toolResults: [] });
-  assert.equal(hasPendingToolCalls(), false);
+  const { sz, resetAll } = makeSummarizer();
+  sz.collectToolCall({ message: {}, toolResults: [] });
+  assert.equal(sz.hasPendingToolCalls(), false);
   resetAll();
 });
 
 test("collectToolCall: uses fallback field names", () => {
-  resetAll();
-  collectToolCall({
+  const { sz, resetAll } = makeSummarizer();
+  sz.collectToolCall({
     message: { content: [{ type: "toolCall", toolCallId: "tc1", toolName: "search", input: { q: "test" } }] },
     toolResults: [{ id: "tc1", content: "plain" }]
   });
-  assert.equal(getPendingToolCalls().length, 1);
-  assert.equal(getPendingToolCalls()[0].id, "tc1");
-  assert.equal(getPendingToolCalls()[0].name, "search");
-  assert.deepEqual(getPendingToolCalls()[0].args, { q: "test" });
-  assert.equal(getPendingToolCalls()[0].result, "plain");
+  assert.equal(sz.getPendingToolCalls().length, 1);
+  assert.equal(sz.getPendingToolCalls()[0].id, "tc1");
+  assert.equal(sz.getPendingToolCalls()[0].name, "search");
+  assert.deepEqual(sz.getPendingToolCalls()[0].args, { q: "test" });
+  assert.equal(sz.getPendingToolCalls()[0].result, "plain");
   resetAll();
 });
 
 // ── restoreSummariesFromBranch ──
 
 test("restoreSummariesFromBranch: restores primary and global entries", () => {
-  resetAll();
-  restoreSummariesFromBranch([
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-primary-data",
       data: { toolCallIds: ["a", "b"], latestId: "b", text: "primary" } },
     { type: "custom", customType: "context-prune-global-data",
       data: { collapsedIds: ["x", "y"], text: "global", timestamp: 2000 } },
     { type: "other", customType: "something" }
   ]);
-  assert.equal(getSummaries().length, 2);
-  assert.equal(getSummaries()[0].type, "primary");
-  assert.equal(getSummaries()[0].text, "primary");
-  assert.equal(getSummaries()[1].type, "global");
-  assert.ok(getSummaries()[1].collapsedIds.has("x"));
+  assert.equal(sz.getSummaries().length, 2);
+  assert.equal(sz.getSummaries()[0].type, "primary");
+  assert.equal(sz.getSummaries()[0].text, "primary");
+  assert.equal(sz.getSummaries()[1].type, "global");
+  assert.ok(sz.getSummaries()[1].collapsedIds.has("x"));
   resetAll();
 });
 
 test("restoreSummariesFromBranch: empty branch yields empty summaries", () => {
-  resetAll();
-  restoreSummariesFromBranch([]);
-  assert.equal(getSummaries().length, 0);
+  const { sz, resetAll } = makeSummarizer();
+  sz.restoreSummariesFromBranch([]);
+  assert.equal(sz.getSummaries().length, 0);
 });

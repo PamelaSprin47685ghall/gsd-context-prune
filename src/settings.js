@@ -21,7 +21,9 @@ export function saveModelId(modelId) {
   try {
     const dir = path.dirname(SETTINGS_PATH);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(SETTINGS_PATH, JSON.stringify({ summarizerModelId: modelId }));
+    const tmp = SETTINGS_PATH + ".tmp." + process.pid;
+    fs.writeFileSync(tmp, JSON.stringify({ summarizerModelId: modelId }));
+    fs.renameSync(tmp, SETTINGS_PATH);
     return true;
   } catch (err) {
     console.error(`pruner: failed to persist model id to ${SETTINGS_PATH}: ${err.message}`);

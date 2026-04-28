@@ -3,7 +3,12 @@ import fs from "node:fs";
 let _listingCache = { dir: null, mtime: 0, listing: "" };
 
 export function readFile(p) {
-  try { return fs.existsSync(p) ? fs.readFileSync(p, "utf8").trim() : ""; } catch { return ""; }
+  try {
+    return fs.readFileSync(p, "utf8").trim();
+  } catch (err) {
+    if (err.code === "ENOENT") return "";
+    throw err;
+  }
 }
 
 function sizeStr(bytes) {
