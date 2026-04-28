@@ -3,7 +3,7 @@ import { buildCavemanBlock, buildCavemanReminder, injectCavemanBlock } from "./s
 import { stripCodebase, stripMessages } from "./src/codebase.js";
 import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
 import { stabilizeIds } from "./src/ids.js";
-import { normalizeMessages } from "./src/normalize.js";
+import { embedReasoningContent, normalizeMessages } from "./src/normalize.js";
 import {
   setSummarizerModelId, getSummarizerModelId, isSummarizing, hasPendingToolCalls,
   getPendingToolCalls, resetPendingToolCalls, getSummaries, restoreSummariesFromBranch,
@@ -47,15 +47,20 @@ export default function contextPrunePlugin(pi) {
 
   pi.on("context", (event) => {
     const messages = event.messages || [];
-    const projected = projectMessages(messages);
+    // Pre-empt gsd-2's convertMessages which drops top-level reasoning_content.
+    // Embed any reasoning into a thinking block so it survives conversion.
+    const withReasoning = embedReasoningContent(messages);
+    const projected = projectMessages(withReasoning);
     const listing = generateFileListing(getCodebaseDir());
     return {
       messages: [
         ...projected,
         {
           role: "assistant",
-          reasoning_content: buildCavemanReminder(),
-          content: [{ type: "text", text: `$ du -hxd1\n${listing}` }]
+          content: [
+            { type: "thinking", thinking: buildCavemanReminder(), thinkingSignature: "reasoning_content" },
+            { type: "thinking", thinking: `<hint>$ du -hxd1\n${listing}\n</hint>`, thinkingSignature: "reasoning_content" }
+          ]
         }
       ]
     };
