@@ -50,7 +50,7 @@ function fixDowngradedCaveman(messages) {
     const block = content.find(c => typeof c.text === "string" && c.text.includes(_listingMarker) && c.text.includes(_cavemanReminder));
     if (!block) return m;
     changed = true;
-    return { ...m, reasoning_content: block.text, content: [{ type: "text", text: "" }] };
+    return { ...m, reasoning_content: block.text, content: [{ type: "text", text: "." }] };
   });
   return changed ? out : messages;
 }
@@ -102,7 +102,7 @@ export default function contextPrunePlugin(pi) {
           ...(modelInfo || {}),
           content: [
             { type: "thinking", thinking: `${buildCavemanReminder()}\n\n<oracle>$ du -hxd1\n${listing}\n</oracle>`, thinkingSignature: "reasoning_content" },
-            { type: "text", text: "" },
+            { type: "text", text: "." },
           ],
         },
       ],
