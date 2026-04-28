@@ -37,8 +37,8 @@ test("integration: session_start restores summaries, context projects them", () 
   assert.ok(result.messages[2].content[0].text.includes("test summary"));
   assert.equal(result.messages[3].toolCallId, "call3");
   assert.equal(result.messages[3].content, "raw 3");
-  // last message is the system reminder
-  assert.equal(result.messages[4].role, "system");
+  // last message is the user reminder
+  assert.equal(result.messages[4].role, "user");
   assert.ok(result.messages[4].content.includes("思考/回复必用极简中文"));
 });
 
@@ -55,7 +55,7 @@ test("integration: context hook preserves one-shot pattern (no extra assistant m
   assert.equal(result.messages.filter(m => m.role === "assistant").length, 0);
   // +1 for appended system(reminder) message
   assert.equal(result.messages.length, 4);
-  assert.equal(result.messages[3].role, "system");
+  assert.equal(result.messages[3].role, "user");
   assert.ok(result.messages[3].content.includes("思考/回复必用极简中文"));
 });
 

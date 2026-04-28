@@ -1,5 +1,5 @@
 import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
-import { buildCavemanBlock, buildCavemanReminder } from "./src/caveman.js";
+import { buildCavemanBlock, buildCavemanReminder, injectCavemanBlock } from "./src/caveman.js";
 import { stripCodebase, stripMessages } from "./src/codebase.js";
 import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
 import { stabilizeIds } from "./src/ids.js";
@@ -11,7 +11,7 @@ import {
 } from "./src/summary.js";
 import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 
-export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock };
+export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock, injectCavemanBlock };
 
 function processPayload(payload, messages, isResponses) {
   const stripped = stripMessages(messages);
@@ -54,7 +54,7 @@ export default function contextPrunePlugin(pi) {
       sysContent = `$ du -hxd1\n${listing}\n`;
     }
     sysContent += buildCavemanReminder();
-    return { messages: [...projected, { role: "system", content: sysContent }] };
+    return { messages: [...projected, { role: "user", content: sysContent }] };
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -76,6 +76,7 @@ export default function contextPrunePlugin(pi) {
     if (!messages) return;
 
     let modified = processPayload(p, messages, isResponses);
+    modified = injectCavemanBlock(modified);
     modified = injectHints(modified, getCodebaseDir());
 
     let result = p;

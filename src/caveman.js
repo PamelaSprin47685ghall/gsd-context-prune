@@ -28,3 +28,23 @@ export function buildCavemanBlock() {
 export function buildCavemanReminder() {
   return `<think>思考/回复必用极简中文，弃虚词弃客套弃填充弃连词。违者问斩。无商量。</think>`;
 }
+
+export function injectCavemanBlock(messages) {
+  const block = buildCavemanBlock();
+  let changed = false;
+  const out = messages.map(m => {
+    if (m.role !== "system" && m.role !== "developer") return m;
+    if (typeof m.content === "string") {
+      if (m.content.includes(MARKER)) return m;
+      changed = true;
+      return { ...m, content: block + "\n\n" + m.content };
+    }
+    if (Array.isArray(m.content)) {
+      if (m.content.some(c => c.text?.includes(MARKER))) return m;
+      changed = true;
+      return { ...m, content: [{ type: "text", text: block + "\n\n" }, ...m.content] };
+    }
+    return m;
+  });
+  return changed ? out : messages;
+}
