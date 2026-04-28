@@ -34,19 +34,20 @@ export function buildHintsBlock(cwd) {
 
 export function buildStablePrompt(systemPrompt) {
   let cwd = null;
-  let inCodebase = false;
+  let skipCodebase = false;
   const out = [];
 
   for (const line of systemPrompt.split("\n")) {
-    if (inCodebase) {
-      if (line.startsWith("#")) {
-        inCodebase = false;
-        out.push(line);
-      }
+    if (line.startsWith("[PROJECT CODEBASE —")) {
+      skipCodebase = true;
       continue;
     }
-    if (line.startsWith("[PROJECT CODEBASE —")) {
-      inCodebase = true;
+    if (skipCodebase) {
+      // End of CODEBASE: next section marker restores normal flow
+      if (line.startsWith("[") || line.startsWith("## ")) {
+        skipCodebase = false;
+        out.push(line);
+      }
       continue;
     }
     // Extract cwd while we pass through

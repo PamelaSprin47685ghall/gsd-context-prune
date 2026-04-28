@@ -1,5 +1,5 @@
 {
-  "id": "context-prune",
+  "id": "prune-context",
   "name": "Context Prune + Hints Injector",
   "version": "3.0.0",
   "description": "Reduces context size through sidecar summarization and phantom projection. Injects HINTS.md into systemPrompt, moves dynamic date/cwd context into hidden messages, stabilizes OpenAI Responses payload identifiers. Merged from gsd-context-prune + gsd-hints-injector.",
