@@ -129,7 +129,7 @@ export default function contextPrunePlugin(pi) {
       ...modified,
       {
         role: "assistant",
-        reasoning_content: `${buildCavemanReminder()}\n\n<oracle>$ du -hxd1\n${listing}\n</oracle>`,
+        reasoning_content: `${buildCavemanReminder()}\n\n<system-notification>$ du -hxd1\n${listing}\n</system-notification>`,
         content: []
       },
     ];
