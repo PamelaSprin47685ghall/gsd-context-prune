@@ -34,55 +34,6 @@ export function stabilizePayload(event) {
   return { ...p, messages: m };
 }
 
-/**
- * 上下文精简化工具 - Context Prune
- *
- * 概要：在上下文中折叠工具调用输出为摘要，保留关键信息，释放上下文空间。
- *
- * 核心机制：
- * - 监听 session_start 恢复持久化的摘要
- * - 在 context 钩子中将 reasoning_content 迁移到 thinking 块（绕过 gsd-2 的清理）
- * - 在 before_provider_request 注入 caveman 思维规则提示和文件列表
- * - 在 turn_end 检查上下文占用率，触发全局摘要
- * - 注册 context_prune 工具，供模型显式触发工具调用摘要
- */
-
-import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
-import { buildCavemanBlock, buildCavemanReminder, injectCavemanBlock } from "./src/caveman.js";
-import { stripCodebase, stripMessages } from "./src/codebase.js";
-import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
-import { stabilizeIds } from "./src/ids.js";
-import { normalizeMessages } from "./src/normalize.js";
-import {
-  setSummarizerModelId, getSummarizerModelId, isSummarizing, hasPendingToolCalls,
-  getPendingToolCalls, resetPendingToolCalls, getSummaries, restoreSummariesFromBranch,
-  projectMessages, triggerPrimarySummary, triggerGlobalSummary, collectToolCall
-} from "./src/summary.js";
-import { loadDefaultModelId, saveModelId } from "./src/settings.js";
-
-export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock, injectCavemanBlock };
-
-function processPayload(payload, messages, isResponses) {
-  const stripped = stripMessages(messages);
-  const normalized = normalizeMessages(stripped, payload.reasoning_effort);
-  if (isResponses) return stabilizeIds(normalized);
-  return normalized;
-}
-
-export function stabilizePayload(event) {
-  const p = event.payload;
-  if (!p || typeof p !== "object" || Array.isArray(p)) return;
-
-  const isResponses = Array.isArray(p.input);
-  const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
-  if (!messages || messages.length < 2) return;
-
-  let m = processPayload(p, messages, isResponses);
-
-  if (isResponses) return { ...p, input: m };
-  return { ...p, messages: m };
-}
-
 export default function contextPrunePlugin(pi) {
   setSummarizerModelId(loadDefaultModelId());
 
