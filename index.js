@@ -3,7 +3,7 @@ import { buildCavemanBlock, buildCavemanReminder, injectCavemanBlock } from "./s
 import { stripCodebase, stripMessages } from "./src/codebase.js";
 import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
 import { stabilizeIds } from "./src/ids.js";
-import { embedReasoningContent, normalizeMessages } from "./src/normalize.js";
+import { normalizeMessages } from "./src/normalize.js";
 import {
   setSummarizerModelId, getSummarizerModelId, isSummarizing, hasPendingToolCalls,
   getPendingToolCalls, resetPendingToolCalls, getSummaries, restoreSummariesFromBranch,
@@ -34,6 +34,30 @@ export function stabilizePayload(event) {
   return { ...p, messages: m };
 }
 
+const _cavemanReminder = buildCavemanReminder();
+const _listingMarker = "$ du -hxd1";
+
+// First-turn fallback: when modelInfo is unavailable, gsd-2's transformMessages
+// degrades the caveman thinking block to plain text.  Detect this by checking
+// for the distinctive listing marker + reminder text, then promote the text
+// back to reasoning_content and drop the stale text copy.
+function fixDowngradedCaveman(messages) {
+  let changed = false;
+  const out = messages.map(m => {
+    if (m.role !== "assistant") return m;
+    if (m.reasoning_content) return m; // already has real reasoning
+    const content = Array.isArray(m.content) ? m.content : [];
+    if (!content.some(c => typeof c.text === "string" && c.text.includes(_listingMarker))) return m;
+    const idx = content.findIndex(c => c.text === _cavemanReminder);
+    if (idx === -1) return m;
+    changed = true;
+    const fixed = [...content];
+    fixed.splice(idx, 1);
+    return { ...m, reasoning_content: _cavemanReminder, content: fixed };
+  });
+  return changed ? out : messages;
+}
+
 export default function contextPrunePlugin(pi) {
   setSummarizerModelId(loadDefaultModelId());
 
@@ -47,22 +71,44 @@ export default function contextPrunePlugin(pi) {
 
   pi.on("context", (event) => {
     const messages = event.messages || [];
-    // Pre-empt gsd-2's convertMessages which drops top-level reasoning_content.
-    // Embed any reasoning into a thinking block so it survives conversion.
-    const withReasoning = embedReasoningContent(messages);
-    const projected = projectMessages(withReasoning);
+
+    // Inherit model info from the latest assistant message so thinking blocks on
+    // injected messages survive gsd-2's transformMessages cross-model gate.
+    let modelInfo = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.provider && m.model) {
+        modelInfo = { provider: m.provider, model: m.model, api: m.api };
+        break;
+      }
+    }
+
+    // Backfill model info on existing messages whose thinking blocks would
+    // otherwise be downgraded by transformMessages (isSameModel = false).
+    const fixed = modelInfo
+      ? messages.map(m => {
+          if (m.role !== "assistant") return m;
+          if (m.provider) return m;
+          if (!Array.isArray(m.content) || !m.content.some(b => b.type === "thinking")) return m;
+          return { ...m, ...modelInfo };
+        })
+      : messages;
+
+    const projected = projectMessages(fixed);
     const listing = generateFileListing(getCodebaseDir());
     return {
       messages: [
         ...projected,
         {
           role: "assistant",
+          // Inject model info so the thinking block survives transformMessages
+          ...(modelInfo || {}),
           content: [
             { type: "thinking", thinking: buildCavemanReminder(), thinkingSignature: "reasoning_content" },
-            { type: "thinking", thinking: `<hint>$ du -hxd1\n${listing}\n</hint>`, thinkingSignature: "reasoning_content" }
-          ]
-        }
-      ]
+            { type: "text", text: `$ du -hxd1\n${listing}` },
+          ],
+        },
+      ],
     };
   });
 
@@ -87,6 +133,10 @@ export default function contextPrunePlugin(pi) {
     let modified = processPayload(p, messages, isResponses);
     modified = injectCavemanBlock(modified);
     modified = injectHints(modified, getCodebaseDir());
+
+    // First-turn fallback: no modelInfo → thinking block downgraded to text by
+    // transformMessages.  Detect the caveman message and hand-fix reasoning_content.
+    modified = fixDowngradedCaveman(modified);
 
     let result = p;
     if (modified !== messages) {
