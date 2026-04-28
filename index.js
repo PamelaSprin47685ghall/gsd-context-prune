@@ -125,16 +125,19 @@ export default function contextPrunePlugin(pi) {
     // (which runs between context and before_provider_request and would degrade
     // the thinking block to plain text if modelInfo is unavailable).
     if (modified[modified.length - 1]?.role === "user") {
-      modified[modified.length - 1].content = [
-        ...modified[modified.length - 1].content,
-        { "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }
-      ]
+      modified = [
+        ...modified,
+        {
+          role: "user",
+          content: [{ "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }],
+        },
+      ];
     } else {
       modified = [
         ...modified,
         {
           role: "assistant",
-          reasoning_content: `<think>${buildCavemanReminder()}</think>`,
+          reasoning_content: buildCavemanReminder(),
           content: [],
         },
       ];
