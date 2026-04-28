@@ -50,11 +50,10 @@ export default function contextPrunePlugin(pi) {
     const projected = projectMessages(messages);
     const listing = generateFileListing(getCodebaseDir());
     let sysContent = "";
-    if (listing) {
-      sysContent = `$ du -hxd1\n${listing}\n`;
-    }
     sysContent += buildCavemanReminder();
-    sysContent = `<system>${sysContent}</system>`;
+    if (listing) {
+      sysContent = `<system>\n$ du -hxd1\n${listing}\n</system>\n`;
+    }
     return { messages: [...projected, { role: "user", content: sysContent }] };
   });
 
