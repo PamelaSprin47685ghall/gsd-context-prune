@@ -133,14 +133,7 @@ export default function contextPrunePlugin(pi) {
         },
       ];
     } else {
-      modified = [
-        ...modified,
-        {
-          role: "assistant",
-          reasoning_content: `<think>${buildCavemanReminder()}</think>${buildCavemanReminder()}`,
-          content: [{ "type": "text", "text": `<think>${buildCavemanReminder()}</think>${buildCavemanReminder()}` }],
-        },
-      ];
+      modified[modified.length - 1].reasoning_content = `<think>${buildCavemanReminder()}</think>`;
     }
 
     let result = p;
