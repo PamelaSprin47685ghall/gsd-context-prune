@@ -1,6 +1,6 @@
 {
   "name": "gsd-context-prune",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "Minimalist context prune plugin",
   "type": "module",
   "exports": "./index.js",
@@ -11,6 +11,8 @@
     "extension": true
   },
   "pi": {
-    "extensions": ["index.js"]
+    "extensions": [
+      "index.js"
+    ]
   }
 }

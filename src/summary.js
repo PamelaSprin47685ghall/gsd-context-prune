@@ -33,6 +33,16 @@ export function createSummarizer() {
     state.lastGlobalSignature = null;
   }
 
+  // Stable message identifier for global summary collapse tracking.
+  // Messages don't have an id field — derive one from existing stable fields.
+  function msgId(m) {
+    if (m.id) return m.id;
+    // toolResult messages have a guaranteed-unique toolCallId
+    if (m.role === "toolResult") return `trz:${m.toolCallId}`;
+    // All other messages have an immutable timestamp from creation
+    return `${m.role}:${m.timestamp}`;
+  }
+
   function restoreSummariesFromBranch(branchEntries) {
     state.summaries = [];
     let latestGlobal = null;
@@ -88,7 +98,7 @@ export function createSummarizer() {
           if (afterSys === -1) afterSys = kept.length;
           continue;
         }
-        if (m.id && ids.has(m.id)) {
+        if (ids.has(msgId(m))) {
           if (!inserted && afterSys !== -1) {
             kept.splice(afterSys, 0, {
               id: `global-sum-${s.timestamp}`, role: "assistant",
@@ -119,6 +129,8 @@ export function createSummarizer() {
       ctx.ui.notify("pruner: 上一轮精简仍在进行中，跳过本次。", "info");
       return;
     }
+    // Lock acquired — clear pending tool calls so they don't accumulate
+    state.pendingToolCalls.length = 0;
     ctx.ui.notify(`pruner: 正在进行初级精简 (${batches.length} 个工具调用)...`, "info");
     try {
       const model = state.summarizerModelId === "default" ? ctx.model
@@ -158,7 +170,7 @@ export function createSummarizer() {
   }
 
   async function triggerGlobalSummary(ctx, pi, projectedMessages) {
-    const collapsedIds = projectedMessages.map(m => m.id).filter(Boolean);
+    const collapsedIds = projectedMessages.map(m => msgId(m));
     if (collapsedIds.length === 0) return;
 
     const signature = `${collapsedIds.length}:${collapsedIds[collapsedIds.length - 1]}`;

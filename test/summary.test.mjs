@@ -49,20 +49,20 @@ test("projectMessages: projects global summary with collapsed msg IDs", () => {
   const { sz, resetAll } = makeSummarizer();
   sz.restoreSummariesFromBranch([
     { type: "custom", customType: "context-prune-global-data",
-      data: { collapsedIds: ["msg1", "msg2"], text: "global summary", timestamp: 1000 } }
+      data: { collapsedIds: ["user:100", "assistant:101"], text: "global summary", timestamp: 1000 } }
   ]);
   const result = sz.projectMessages([
     { role: "system", content: "sys" },
-    { id: "msg1", role: "user", content: "a" },
-    { id: "msg2", role: "assistant", content: "b" },
-    { id: "msg3", role: "user", content: "c" }
+    { role: "user", content: "a", timestamp: 100 },
+    { role: "assistant", content: "b", timestamp: 101 },
+    { role: "user", content: "c", timestamp: 102 }
   ]);
   const sumMsg = result.find(m => m.id && m.id.startsWith("global-sum-"));
   assert.ok(sumMsg);
   assert.ok(sumMsg.content[0].text.includes("global summary"));
-  assert.equal(result.find(m => m.id === "msg1").content.length, 0);
-  assert.equal(result.find(m => m.id === "msg2").content.length, 0);
-  assert.equal(result.find(m => m.id === "msg3").content, "c");
+  assert.equal(result.find(m => m.role === "user" && m.timestamp === 100).content.length, 0);
+  assert.equal(result.find(m => m.role === "assistant" && m.timestamp === 101).content.length, 0);
+  assert.equal(result.find(m => m.role === "user" && m.timestamp === 102).content, "c");
   resetAll();
 });
 
@@ -180,12 +180,12 @@ test("restoreSummariesFromBranch: keeps only latest global summary", () => {
   assert.equal(globals[0].text, "new");
 });
 
-test("triggerGlobalSummary: no-op when projected messages have no ids", async () => {
+test("triggerGlobalSummary: no-op when projected messages empty", async () => {
   const { sz } = makeSummarizer();
   await sz.triggerGlobalSummary(
     { ui: { notify: () => {} }, model: {} },
     { appendEntry: () => {} },
-    [{ role: "user", content: "hello" }]
+    []
   );
   assert.equal(sz.getSummaries().length, 0);
 });

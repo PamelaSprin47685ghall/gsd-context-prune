@@ -121,8 +121,86 @@ test("integration: no global summary on error stop", () => {
   events.session_start({}, sessionCtx());
   events.context({ messages: [{ role: "user", content: "hi" }] });
   events.turn_end({ message: { stopReason: "error" } }, {
-    getContextUsage: () => ({ contextWindow: 300, totalTokens: 250 }),
+    getContextUsage: () => ({ tokens: 250, contextWindow: 300, percent: 83.33 }),
     ui: { notify: m => notes.push(m) }
   });
   assert.ok(!notes.some(n => n.includes("高级精简")));
+});
+
+test("integration: triggers global summary at >66% context usage", async () => {
+  const pi = { on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {} };
+  const handlers = {}, notes = [];
+  pi.on = (e, cb) => { handlers[e] = cb; };
+  contextPrunePlugin(pi);
+  handlers.session_start({}, {
+    ui: { notify: () => {} },
+    sessionManager: { getBranch: () => [] }
+  });
+  handlers.context({ messages: [{ role: "user", content: "hi", timestamp: 1000 }, { role: "assistant", content: "ok", timestamp: 1001 }] });
+  const ctx = {
+    getContextUsage: () => ({ tokens: 262144, contextWindow: 300000, percent: 87.38 }),
+    modelRegistry: { find: () => null },
+    model: "fake",
+    ui: { notify: (m, t) => notes.push({ m, t }) }
+  };
+  handlers.turn_end({
+    message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }], stopReason: "stop" },
+    toolResults: [{ toolCallId: "tc1", content: "result" }]
+  }, ctx);
+  // Wait for async summary queue
+  await new Promise(r => setTimeout(r, 100));
+  assert.ok(notes.some(n => n.m.includes("高级精简")) || notes.some(n => n.m.includes("正在")))
+});
+
+// ── Input auto-trigger ──
+
+test("integration: input triggers primary summary when tool calls pending", async () => {
+  const pi = { on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {} };
+  const handlers = {}, notes = [];
+  pi.on = (e, cb) => { handlers[e] = cb; };
+  contextPrunePlugin(pi);
+  handlers.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+  // Simulate a turn with tool calls
+  handlers.turn_end({
+    message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "x" } }] },
+    toolResults: [{ toolCallId: "tc1", content: [{ type: "text", text: "file content" }] }]
+  }, sessionCtx());
+
+  // User sends new message → should trigger primary summary
+  const result = handlers.input({ text: "continue", source: "interactive" }, {
+    ui: { notify: (m) => notes.push(m) },
+    model: {},
+    modelRegistry: { find: () => null }
+  });
+  assert.deepEqual(result, { action: "continue" });
+  await new Promise(r => setTimeout(r, 50));
+  assert.ok(notes.some(n => n.includes("初级精简") || n.includes("正在进行")));
+});
+
+test("integration: input does not trigger when no pending tool calls", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const notes = [];
+  const result = events.input({ text: "hello", source: "interactive" }, {
+    ui: { notify: (m) => notes.push(m) },
+    model: {}
+  });
+  assert.deepEqual(result, { action: "continue" });
+  assert.equal(notes.length, 0);
+});
+
+test("integration: input with source=extension also triggers", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  events.turn_end({
+    message: { content: [{ type: "toolCall", id: "ext1", name: "search", arguments: {} }] },
+    toolResults: [{ toolCallId: "ext1", content: "hits" }]
+  }, sessionCtx());
+  const notes = [];
+  events.input({ text: "from extension", source: "extension" }, {
+    ui: { notify: (m) => notes.push(m) },
+    model: {}
+  });
+  assert.ok(notes.some(n => n.includes("初级精简") || n.includes("正在进行")));
 });

@@ -54,7 +54,7 @@ test("buildHintsBlock: returns context_prune hint when no user hints", () => {
   const { block } = m.buildHintsBlock("/tmp/proj");
   assert.ok(block.includes("[HINTS — Stable Guidance]"));
   assert.ok(block.includes("Context Prune Discipline"));
-  assert.ok(block.includes("context_prune"));
+  assert.ok(block.includes("automatically compressed"));
 });
 
 test("buildHintsBlock: formats hints block", () => {

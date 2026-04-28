@@ -33,10 +33,10 @@ export function loadHintSources(cwd) {
 
 function contextPruneHint() {
   return "## Context Prune Discipline\n\n"
-    + "Call `context_prune` aggressively. Every batch of tool calls (reads, searches, commands) produces large results "
-    + "that silently fill your context window. If you don't prune regularly, earlier instructions and constraints will "
-    + "be pushed out of context, leading to degraded reasoning and task failure. There is no penalty for calling it "
-    + "too often — call it after every meaningful batch of tool work.";
+    + "Tool call outputs are automatically compressed into summaries when you submit a new prompt. "
+    + "This prevents large outputs from silently filling your context window and pushing out earlier "
+    + "instructions and constraints. No manual action is needed — the compression happens before each "
+    + "new turn so your context stays manageable.";
 }
 
 export function buildHintsBlock(cwd) {
