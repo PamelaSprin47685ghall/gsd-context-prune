@@ -49,11 +49,16 @@ export default function contextPrunePlugin(pi) {
     const messages = event.messages || [];
     const projected = projectMessages(messages);
     const listing = generateFileListing(getCodebaseDir());
-    let sysContent = buildCavemanReminder();
-    if (listing) {
-      sysContent += `<system>\n$ du -hxd1\n${listing}\n</system>`;
-    }
-    return { messages: [...projected, { role: "assistant", reasoning_content: sysContent, content: [] }] };
+    return {
+      messages: [
+        ...projected,
+        {
+          role: "assistant",
+          reasoning_content: buildCavemanReminder(),
+          content: [{ type: "text", text: `$ du -hxd1\n${listing}` }]
+        }
+      ]
+    };
   });
 
   pi.on("turn_end", (event, ctx) => {

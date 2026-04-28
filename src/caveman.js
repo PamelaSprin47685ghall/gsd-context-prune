@@ -4,7 +4,6 @@ const MARKER = "[思维与表达]";
 
 export function buildCavemanBlock() {
   return `${MARKER}
-<think>
 ## 规则
 - 思考要用极简中文
 - 弃虚词：了/的/呢/吗/吧/啊/哦/呀/哈
@@ -21,12 +20,11 @@ export function buildCavemanBlock() {
 
 连接池：
 - 误：「连接池的核心思想是复用现有连接而不是为每个请求创建新连接，这样可以避免反复建立连接的开销。」
-- 正：「池可复用 DB 连接。免握手→高负载快。」
-</think>`;
+- 正：「池可复用 DB 连接。免握手→高负载快。」`;
 }
 
 export function buildCavemanReminder() {
-  return `<think>思考/回复必用极简中文，弃虚词弃客套弃填充弃连词。违者问斩。无商量。</think>`;
+  return `思考/回复必用极简中文，弃虚词弃客套弃填充弃连词。违者问斩。无商量。`;
 }
 
 export function injectCavemanBlock(messages) {
