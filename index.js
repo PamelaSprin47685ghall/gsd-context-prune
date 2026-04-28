@@ -38,22 +38,19 @@ const _cavemanReminder = buildCavemanReminder();
 const _listingMarker = "$ du -hxd1";
 
 // First-turn fallback: when modelInfo is unavailable, gsd-2's transformMessages
-// degrades the caveman thinking block to plain text.  Detect this by checking
-// for the distinctive listing marker + reminder text, then promote the text
-// back to reasoning_content and drop the stale text copy.
+// degrades the caveman thinking block to plain text.  Detect the combined
+// thinking text (reminder + <oracle> listing) by its unique markers, promote it
+// back to reasoning_content, and clear content.
 function fixDowngradedCaveman(messages) {
   let changed = false;
   const out = messages.map(m => {
     if (m.role !== "assistant") return m;
-    if (m.reasoning_content) return m; // already has real reasoning
+    if (m.reasoning_content) return m; // thinking survived, nothing to fix
     const content = Array.isArray(m.content) ? m.content : [];
-    if (!content.some(c => typeof c.text === "string" && c.text.includes(_listingMarker))) return m;
-    const idx = content.findIndex(c => c.text === _cavemanReminder);
-    if (idx === -1) return m;
+    const block = content.find(c => typeof c.text === "string" && c.text.includes(_listingMarker) && c.text.includes(_cavemanReminder));
+    if (!block) return m;
     changed = true;
-    const fixed = [...content];
-    fixed.splice(idx, 1);
-    return { ...m, reasoning_content: _cavemanReminder, content: fixed };
+    return { ...m, reasoning_content: block.text, content: [{ type: "text", text: "" }] };
   });
   return changed ? out : messages;
 }
@@ -104,8 +101,8 @@ export default function contextPrunePlugin(pi) {
           // Inject model info so the thinking block survives transformMessages
           ...(modelInfo || {}),
           content: [
-            { type: "thinking", thinking: buildCavemanReminder(), thinkingSignature: "reasoning_content" },
-            { type: "text", text: `$ du -hxd1\n${listing}` },
+            { type: "thinking", thinking: `${buildCavemanReminder()}\n\n<oracle>$ du -hxd1\n${listing}\n</oracle>`, thinkingSignature: "reasoning_content" },
+            { type: "text", text: "" },
           ],
         },
       ],
