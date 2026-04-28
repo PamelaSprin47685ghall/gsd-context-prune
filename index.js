@@ -127,14 +127,14 @@ export default function contextPrunePlugin(pi) {
     if (modified[modified.length - 1]?.role === "user") {
       modified[modified.length - 1].content = [
         ...modified[modified.length - 1].content,
-        { "type": "text", "text": buildCavemanReminder() }
+        { "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }
       ]
     } else {
       modified = [
         ...modified,
         {
           role: "assistant",
-          reasoning_content: buildCavemanReminder(),
+          reasoning_content: `<think>${buildCavemanReminder()}</think>`,
           content: [],
         },
       ];
