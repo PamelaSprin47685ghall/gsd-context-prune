@@ -1,30 +1,39 @@
-let summaries = [];
-let pendingToolCalls = [];
-let summarizing = false;
-let summarizerModelId = "default";
+const state = {
+  summaries: [],
+  pendingToolCalls: [],
+  summarizing: false,
+  summarizerModelId: "default",
+};
 
-export function setSummarizerModelId(id) { summarizerModelId = id; }
-export function getSummarizerModelId() { return summarizerModelId; }
-export function isSummarizing() { return summarizing; }
-export function hasPendingToolCalls() { return pendingToolCalls.length > 0; }
-export function getPendingToolCalls() { return pendingToolCalls; }
-export function resetPendingToolCalls() { pendingToolCalls.length = 0; }
-export function getSummaries() { return summaries; }
+export function setSummarizerModelId(id) { state.summarizerModelId = id; }
+export function getSummarizerModelId() { return state.summarizerModelId; }
+export function isSummarizing() { return state.summarizing; }
+export function hasPendingToolCalls() { return state.pendingToolCalls.length > 0; }
+export function getPendingToolCalls() { return state.pendingToolCalls; }
+export function resetPendingToolCalls() { state.pendingToolCalls.length = 0; }
+export function getSummaries() { return state.summaries; }
+
+export function resetState() {
+  state.summaries.length = 0;
+  state.pendingToolCalls.length = 0;
+  state.summarizing = false;
+  state.summarizerModelId = "default";
+}
 
 export function restoreSummariesFromBranch(branchEntries) {
-  summaries = [];
+  state.summaries = [];
   for (const entry of branchEntries || []) {
     if (entry.type !== "custom") continue;
     if (entry.customType === "context-prune-primary-data")
-      summaries.push({ type: "primary", ...entry.data, toolCallIds: entry.data.toolCallIds });
+      state.summaries.push({ type: "primary", ...entry.data, toolCallIds: entry.data.toolCallIds });
     if (entry.customType === "context-prune-global-data")
-      summaries.push({ type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) });
+      state.summaries.push({ type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) });
   }
 }
 
 export function projectMessages(messages) {
   let result = messages;
-  for (const s of summaries) {
+  for (const s of state.summaries) {
     if (s.type === "primary") {
       const ids = new Set(s.toolCallIds);
       let pos = -1, keep = [];
@@ -82,11 +91,11 @@ function collectToolCallBatches(batches) {
 }
 
 export async function triggerPrimarySummary(ctx, pi, batches) {
-  summarizing = true;
+  state.summarizing = true;
   ctx.ui.notify(`pruner: 正在进行初级精简 (${batches.length} 个工具调用)...`, "info");
   try {
-    const model = summarizerModelId === "default" ? ctx.model
-      : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
+    const model = state.summarizerModelId === "default" ? ctx.model
+      : ctx.modelRegistry?.find(...state.summarizerModelId.split("/")) || ctx.model;
     const mod = await import("@gsd/pi-ai");
     const apiKey = await ctx.modelRegistry?.getApiKey(model);
     const text = collectToolCallBatches(batches);
@@ -99,12 +108,12 @@ export async function triggerPrimarySummary(ctx, pi, batches) {
     const summaryText = res.content.map(c => c.text).join("\n");
     const toolCallIds = batches.map(b => b.id);
     const latestId = toolCallIds[toolCallIds.length - 1];
-    summaries.push({ type: "primary", toolCallIds, latestId, text: summaryText });
+    state.summaries.push({ type: "primary", toolCallIds, latestId, text: summaryText });
     pi.appendEntry("context-prune-primary-data", { toolCallIds, latestId, text: summaryText });
     ctx.ui.notify("pruner: 初级精简完成，工具输出已被折叠。", "success");
   } catch (err) {
     ctx.ui.notify(`pruner: 初级精简失败 - ${err.message}`, "error");
-  } finally { summarizing = false; }
+  } finally { state.summarizing = false; }
 }
 
 function flattenMessages(messages) {
@@ -116,11 +125,11 @@ function flattenMessages(messages) {
 }
 
 export async function triggerGlobalSummary(ctx, pi, projectedMessages) {
-  summarizing = true;
+  state.summarizing = true;
   ctx.ui.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
   try {
-    const model = summarizerModelId === "default" ? ctx.model
-      : ctx.modelRegistry?.find(...summarizerModelId.split("/")) || ctx.model;
+    const model = state.summarizerModelId === "default" ? ctx.model
+      : ctx.modelRegistry?.find(...state.summarizerModelId.split("/")) || ctx.model;
     const mod = await import("@gsd/pi-ai");
     const apiKey = await ctx.modelRegistry?.getApiKey(model);
     const text = flattenMessages(projectedMessages);
@@ -132,12 +141,12 @@ export async function triggerGlobalSummary(ctx, pi, projectedMessages) {
     }, { apiKey, headers: model.headers });
     const summaryText = res.content.map(c => c.text).join("\n");
     const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
-    summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
+    state.summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
     pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
     ctx.ui.notify("pruner: 高级精简完成，历史已被折叠。", "success");
   } catch (err) {
     ctx.ui.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
-  } finally { summarizing = false; }
+  } finally { state.summarizing = false; }
 }
 
 export function collectToolCall(event) {
@@ -148,7 +157,7 @@ export function collectToolCall(event) {
     const id = tc.id || tc.toolCallId;
     const res = toolResults.find(r => r.toolCallId === id || r.id === id);
     if (res) {
-      pendingToolCalls.push({
+      state.pendingToolCalls.push({
         id, name: tc.name || tc.toolName,
         args: tc.arguments || tc.args || tc.input || {},
         result: Array.isArray(res.content)

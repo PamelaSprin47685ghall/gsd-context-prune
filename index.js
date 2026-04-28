@@ -64,9 +64,18 @@ export default function contextPrunePlugin(pi) {
   });
 
   pi.on("before_provider_request", (e) => {
-    // Strip random sessionId so same content hits same cache across sessions
     const p = e.payload;
-    if (p && 'input' in p) delete p.prompt_cache_key;
+    if (!p) return p;
+
+    // Ensure every message has a reasoning_content field so providers don't choke
+    const msgs = 'input' in p ? p.input : p.messages;
+    if (Array.isArray(msgs))
+      for (const m of msgs)
+        if (m && typeof m === 'object' && !('reasoning_content' in m))
+          m.reasoning_content = "";
+
+    // Strip random sessionId so same content hits same cache across sessions
+    if ('input' in p) delete p.prompt_cache_key;
     return p;
   });
 
