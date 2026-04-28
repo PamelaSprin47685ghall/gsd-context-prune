@@ -1,111 +1,58 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import contextPrunePlugin, { setCodebaseDir } from "../index.js";
-import { withTmp, withEnv } from "./helpers.mjs";
+import { mock } from "node:test";
 
-const makePlugin = () => {
-  const events = {};
-  contextPrunePlugin({
-    on: (e, cb) => { events[e] = cb; },
-    registerTool: () => {}, registerCommand: () => {}
-  });
-  return events;
-};
+let m;
+mock.module("../src/fs.js", {
+  exports: {
+    readFile: () => "mocked-hint",
+    generateFileListing: () => " 123.0M  src/\n   4.0K  package.json\n 456.0K  README.md"
+  }
+});
+m = await import("../src/inject.js");
 
-test("before_provider_request: injects HINTS into system prompt", () => withTmp(pDir => withTmp(gDir => {
-  mkdirSync(join(pDir, ".gsd"));
-  writeFileSync(join(gDir, "HINTS.md"), "global-hint-content");
-  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "project-hint-content");
-  withEnv("GSD_HOME", gDir, () => {
-    setCodebaseDir(pDir);
-    const events = makePlugin();
-    events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-    const result = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "You are a helpful assistant.\n\n## Subagent Model\n\nDone." },
-          { role: "user", content: "hello" }
-        ]
-      }
-    });
-    assert.ok(result.messages[0].content.includes("[HINTS — Stable Guidance]"));
-    assert.ok(result.messages[0].content.includes("global-hint-content"));
-    assert.ok(result.messages[0].content.includes("project-hint-content"));
-    assert.ok(result.messages[0].content.includes("You are a helpful assistant"));
-    assert.equal(result.messages.length, 2);
-    assert.equal(result.messages[0].role, "system");
-    assert.equal(result.messages[1].role, "user");
-  });
-})));
+test("buildStablePrompt: strips CODEBASE and appends HINTS", () => {
+  const prompt = "Role.\nCurrent working directory: /tmp/d\n\n## Subagent Model\n\nUse default.\n\n[PROJECT CODEBASE — File structure]\n- app.js\n\n## End";
+  const r = m.buildStablePrompt(prompt);
+  assert.ok(!r.includes("PROJECT CODEBASE"));
+  assert.ok(r.includes("[HINTS — Stable Guidance]"));
+  assert.ok(r.includes("mocked-hint"));
+  assert.ok(r.includes("Role."));
+  assert.ok(r.includes("## End"));
+  assert.ok(r.includes("$ du -hxd1"));
+  assert.ok(r.includes("src/"));
+  assert.ok(r.includes("package.json"));
+});
 
-test("before_provider_request: idempotent — does not double-inject HINTS", () => withTmp(pDir => withTmp(gDir => {
-  mkdirSync(join(pDir, ".gsd"));
-  writeFileSync(join(gDir, "HINTS.md"), "persistent-hint");
-  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "project-hint-2");
-  withEnv("GSD_HOME", gDir, () => {
-    setCodebaseDir(pDir);
-    const events = makePlugin();
-    events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-    const r1 = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "sys" },
-          { role: "user", content: "msg 1" }
-        ]
-      }
-    });
-    const r2 = events.before_provider_request({
-      payload: { model: "test",
-        messages: r1.messages.map((m, i) =>
-          i === r1.messages.length - 1
-            ? { role: "user", content: "msg 2" }
-            : m
-        )
-      }
-    });
-    const hintsCount = (r2.messages[0].content.match(/\[HINTS — Stable Guidance\]/g) || []).length;
-    assert.equal(hintsCount, 1);
-  });
-})));
+test("buildStablePrompt: extracts cwd from Current working directory line", () => {
+  const prompt = "Role.\nCurrent working directory: /real/proj\n\n[PROJECT CODEBASE — File structure]\n- x.js\n\n## Done";
+  const r = m.buildStablePrompt(prompt);
+  assert.ok(r.includes("/real/proj"));
+  assert.ok(r.includes("$ du -hxd1"));
+});
 
-test("before_provider_request: always injects context_prune hint (even without user HINTS)", () => withTmp(pDir => withTmp(gDir => {
-  withEnv("GSD_HOME", gDir, () => {
-    setCodebaseDir(pDir);
-    const events = makePlugin();
-    events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-    const result = events.before_provider_request({
-      payload: { model: "test",
-        messages: [
-          { role: "system", content: "Just system." },
-          { role: "user", content: "hi" }
-        ]
-      }
-    });
-    assert.ok(result.messages[0].content.includes("[HINTS — Stable Guidance]"));
-    assert.ok(result.messages[0].content.includes("Context Prune Discipline"));
-  });
-})));
+test("buildStablePrompt: no CODEBASE, just appends HINTS", () => {
+  const prompt = "You are helpful.\nCurrent working directory: /tmp\n\n## Subagent Model\n\nDone.";
+  const r = m.buildStablePrompt(prompt);
+  assert.ok(r.includes("[HINTS — Stable Guidance]"));
+  assert.ok(r.includes("You are helpful"));
+});
 
-test("before_provider_request: injects HINTS into array-based system content", () => withTmp(pDir => withTmp(gDir => {
-  mkdirSync(join(pDir, ".gsd"));
-  writeFileSync(join(gDir, "HINTS.md"), "array-hint");
-  writeFileSync(join(pDir, ".gsd", "HINTS.md"), "arr-project");
-  withEnv("GSD_HOME", gDir, () => {
-    setCodebaseDir(pDir);
-    const events = makePlugin();
-    events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
-    const result = events.before_provider_request({
-      payload: { model: "test",
-        input: [
-          { role: "developer", content: [{ type: "text", text: "Dev instructions." }] },
-          { role: "user", content: "hi" }
-        ]
-      }
-    });
-    assert.ok(result.input[0].content[0].text.includes("[HINTS — Stable Guidance]"));
-    assert.ok(result.input[0].content[0].text.includes("array-hint"));
-    assert.equal(result.input.length, 2);
-  });
-})));
+test("buildStablePrompt: worktree override takes priority", () => {
+  const prompt = [
+    "Role.",
+    "Current working directory: /some/old/path",
+    "Some instructions.",
+    "",
+    "[WORKTREE CONTEXT — OVERRIDES CURRENT WORKING DIRECTORY ABOVE]",
+    "The actual current working directory is: /real/worktree/path",
+    "---",
+    "[PROJECT CODEBASE — File structure]",
+    "- old.js",
+    "## Subagent Model",
+    "Use claude."
+  ].join("\n");
+  const r = m.buildStablePrompt(prompt);
+  assert.ok(r.includes("$ du -hxd1"));
+  assert.ok(r.includes("/real/worktree/path"));
+});

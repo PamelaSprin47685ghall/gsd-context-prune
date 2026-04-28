@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { readFile } from "./util.js";
+import { readFile } from "./fs.js";
 
 const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
 

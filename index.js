@@ -1,37 +1,13 @@
-import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
-import { stripCodebase, stripMessages } from "./src/codebase.js";
-import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
-import { stabilizeIds } from "./src/ids.js";
-import { normalizeMessages } from "./src/normalize.js";
+import { buildStablePrompt, buildHintsBlock, loadHintSources } from "./src/inject.js";
+import { generateFileListing } from "./src/fs.js";
+import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 import {
   setSummarizerModelId, getSummarizerModelId, isSummarizing, hasPendingToolCalls,
   getPendingToolCalls, resetPendingToolCalls, getSummaries, restoreSummariesFromBranch,
   projectMessages, triggerPrimarySummary, triggerGlobalSummary, collectToolCall
 } from "./src/summary.js";
-import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 
-export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock };
-
-function processPayload(payload, messages, isResponses) {
-  const stripped = stripMessages(messages);
-  const normalized = normalizeMessages(stripped, payload.reasoning_effort);
-  if (isResponses) return stabilizeIds(normalized);
-  return normalized;
-}
-
-export function stabilizePayload(event) {
-  const p = event.payload;
-  if (!p || typeof p !== "object" || Array.isArray(p)) return;
-
-  const isResponses = Array.isArray(p.input);
-  const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
-  if (!messages || messages.length < 2) return;
-
-  let m = processPayload(p, messages, isResponses);
-
-  if (isResponses) return { ...p, input: m };
-  return { ...p, messages: m };
-}
+export { generateFileListing, projectMessages, loadHintSources, buildHintsBlock };
 
 export default function contextPrunePlugin(pi) {
   setSummarizerModelId(loadDefaultModelId());
@@ -44,54 +20,35 @@ export default function contextPrunePlugin(pi) {
     );
   });
 
+  pi.on("before_agent_start", (event) => {
+    const stable = buildStablePrompt(event.systemPrompt);
+    if (stable !== event.systemPrompt)
+      return { systemPrompt: stable };
+  });
+
   pi.on("context", (event) => {
-    const messages = event.messages || [];
+    const msgs = event.messages || [];
 
-    // Inherit model info from the latest assistant message so thinking blocks on
-    // injected messages survive gsd-2's transformMessages cross-model gate.
-    let modelInfo = null;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i];
-      if (m.role === "assistant" && m.provider && m.model) {
-        modelInfo = { provider: m.provider, model: m.model, api: m.api };
-        break;
-      }
-    }
+    // Find the last assistant message with provider info (for model attribution)
+    const last = msgs.findLast(m => m.role === "assistant" && m.provider && m.model);
+    const modelInfo = last ? { provider: last.provider, model: last.model, api: last.api } : null;
 
-    // Migrate top-level reasoning_content into content[].thinking blocks on all
-    // assistant messages.  gsd-2's transformMessages strips top-level
-    // reasoning_content before before_provider_request runs; wrapping it in a
-    // thinking block earlier (here in context) preserves it.
-    const migrated = messages.map(m => {
-      if (m.role !== "assistant") return m;
-      if (!m.reasoning_content) return m;
+    // Migrate reasoning_content into thinking blocks
+    const migrated = msgs.map(m => {
+      if (m.role !== "assistant" || !m.reasoning_content) return m;
       const content = Array.isArray(m.content) ? [...m.content] : [];
-      const thinkingIdx = content.findIndex(c => c.type === "thinking");
-      if (thinkingIdx !== -1) {
-        content[thinkingIdx] = {
-          ...content[thinkingIdx],
-          thinking: m.reasoning_content + "\n" + content[thinkingIdx].thinking,
-        };
-      } else {
-        content.unshift({
-          type: "thinking",
-          thinking: m.reasoning_content,
-          thinkingSignature: "reasoning_content",
-        });
-      }
+      const ti = content.findIndex(c => c.type === "thinking");
+      if (ti !== -1)
+        content[ti] = { ...content[ti], thinking: m.reasoning_content + "\n" + content[ti].thinking };
+      else
+        content.unshift({ type: "thinking", thinking: m.reasoning_content, thinkingSignature: "reasoning_content" });
       const { reasoning_content, ...rest } = m;
       return { ...rest, content };
     });
 
-    // Backfill model info on existing messages whose thinking blocks would
-    // otherwise be downgraded by transformMessages (isSameModel = false).
+    // Attach model info to any thinking-bearing assistant that lacks it
     const fixed = modelInfo
-      ? migrated.map(m => {
-        if (m.role !== "assistant") return m;
-        if (m.provider) return m;
-        if (!Array.isArray(m.content) || !m.content.some(b => b.type === "thinking")) return m;
-        return { ...m, ...modelInfo };
-      })
+      ? migrated.map(m => m.role !== "assistant" || m.provider || !Array.isArray(m.content) || !m.content.some(b => b?.type === "thinking") ? m : { ...m, ...modelInfo })
       : migrated;
 
     return { messages: projectMessages(fixed) };
@@ -99,30 +56,18 @@ export default function contextPrunePlugin(pi) {
 
   pi.on("turn_end", (event, ctx) => {
     collectToolCall(event);
-    const usage = ctx?.getContextUsage?.();
-    if (usage?.contextWindow > 0 && event.message?.stopReason !== "aborted" && event.message?.stopReason !== "error") {
-      const tokens = usage.totalTokens || (usage.input + usage.output + usage.cacheRead + usage.cacheWrite);
-      if (tokens / usage.contextWindow > 2 / 3 && !isSummarizing())
-        triggerGlobalSummary(ctx, pi, projectMessages(event.messages || []));
-    }
+    const u = ctx?.getContextUsage?.();
+    if (!u?.contextWindow || event.message?.stopReason === "aborted" || event.message?.stopReason === "error") return;
+    const total = u.totalTokens || (u.input + u.output + u.cacheRead + u.cacheWrite);
+    if (total / u.contextWindow > 2 / 3 && !isSummarizing())
+      triggerGlobalSummary(ctx, pi, projectMessages(event.messages || []));
   });
 
   pi.on("before_provider_request", (e) => {
+    // Strip random sessionId so same content hits same cache across sessions
     const p = e.payload;
-    if (!p || typeof p !== "object") return;
-
-    const isResponses = Array.isArray(p.input);
-    const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
-    if (!messages) return;
-
-    let modified = processPayload(p, messages, isResponses);
-    modified = injectHints(modified, getCodebaseDir());
-
-    let result = p;
-    if (modified !== messages) {
-      result = isResponses ? { ...result, input: modified } : { ...result, messages: modified };
-    }
-    return result;
+    if (p && 'input' in p) delete p.prompt_cache_key;
+    return p;
   });
 
   pi.registerTool({

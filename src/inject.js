@@ -1,6 +1,8 @@
 import path from "node:path";
 import os from "node:os";
-import { readFile } from "./util.js";
+import { readFile, generateFileListing } from "./fs.js";
+
+// ─── HINTS loading ───────────────────────────────────────────────────
 
 export function loadHintSources(cwd) {
   const home = process.env.GSD_HOME || path.join(os.homedir(), ".gsd");
@@ -28,23 +30,35 @@ export function buildHintsBlock(cwd) {
     parts.join("\n\n")}`;
 }
 
-export function injectHints(messages, cwd) {
-  const block = buildHintsBlock(cwd);
-  if (!block) return messages;
-  let changed = false;
-  const out = messages.map(m => {
-    if (m.role !== "system" && m.role !== "developer") return m;
-    if (typeof m.content === "string") {
-      if (m.content.includes("[HINTS — Stable Guidance]")) return m;
-      changed = true;
-      return { ...m, content: block + "\n\n" + m.content };
+// ─── System prompt injection ─────────────────────────────────────────
+
+export function buildStablePrompt(systemPrompt) {
+  let cwd = null;
+  let inCodebase = false;
+  const out = [];
+
+  for (const line of systemPrompt.split("\n")) {
+    if (inCodebase) {
+      if (line.startsWith("#")) {
+        inCodebase = false;
+        out.push(line);
+      }
+      continue;
     }
-    if (Array.isArray(m.content)) {
-      if (m.content.some(c => c.text?.includes("[HINTS — Stable Guidance]"))) return m;
-      changed = true;
-      return { ...m, content: [{ type: "text", text: block + "\n\n" }, ...m.content] };
+    if (line.startsWith("[PROJECT CODEBASE —")) {
+      inCodebase = true;
+      continue;
     }
-    return m;
-  });
-  return changed ? out : messages;
+    // Extract cwd while we pass through
+    const wt = /The actual current working directory is: (.+)/.exec(line);
+    if (wt) cwd = wt[1].trim();
+    const cd = /Current working directory: (.+)/.exec(line);
+    if (!cwd && cd) cwd = cd[1].trim();
+    out.push(line);
+  }
+
+  const hints = buildHintsBlock(cwd);
+  const listing = cwd ? generateFileListing(cwd) : "";
+  const listingBlock = listing ? `\n$ du -hxd1\n${listing}\n` : "";
+  return out.join("\n") + "\n\n" + hints + listingBlock;
 }

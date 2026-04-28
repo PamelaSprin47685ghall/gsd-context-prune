@@ -1,15 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import contextPrunePlugin from "../index.js";
-
-const makePlugin = () => {
-  const events = {};
-  contextPrunePlugin({
-    on: (e, cb) => { events[e] = cb; },
-    registerTool: () => {}, registerCommand: () => {}
-  });
-  return events;
-};
+import { makePlugin, sessionCtx } from "./helpers.mjs";
 
 test("integration: session_start restores summaries, context projects them", () => {
   const events = makePlugin();
@@ -28,8 +20,7 @@ test("integration: session_start restores summaries, context projects them", () 
       { role: "toolResult", toolCallId: "call3", content: "raw 3" }
     ]
   });
-  // +1 for appended system(reminder+listing) message
-  assert.equal(result.messages.length, 5);
+  assert.equal(result.messages.length, 4);
   assert.equal(result.messages[0].role, "user");
   assert.equal(result.messages[1].toolCallId, "call1");
   assert.deepEqual(result.messages[1].content, []);
@@ -37,14 +28,11 @@ test("integration: session_start restores summaries, context projects them", () 
   assert.ok(result.messages[2].content[0].text.includes("test summary"));
   assert.equal(result.messages[3].toolCallId, "call3");
   assert.equal(result.messages[3].content, "raw 3");
-  // last message is the user reminder
-  assert.equal(result.messages[4].role, "user");
-  assert.ok(result.messages[4].content.includes("思考/回复必用极简中文"));
 });
 
 test("integration: context hook preserves one-shot pattern (no extra assistant msgs)", () => {
   const events = makePlugin();
-  events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+  events.session_start({}, sessionCtx());
   const result = events.context({
     messages: [
       { role: "system", content: "sys" },
@@ -53,10 +41,19 @@ test("integration: context hook preserves one-shot pattern (no extra assistant m
     ]
   });
   assert.equal(result.messages.filter(m => m.role === "assistant").length, 0);
-  // +1 for appended system(reminder) message
-  assert.equal(result.messages.length, 4);
-  assert.equal(result.messages[3].role, "user");
-  assert.ok(result.messages[3].content.includes("思考/回复必用极简中文"));
+});
+
+test("integration: migrates reasoning_content to thinking block", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.context({
+    messages: [
+      { role: "assistant", content: [], reasoning_content: "deep thought" }
+    ]
+  });
+  assert.equal(result.messages[0].content[0].type, "thinking");
+  assert.equal(result.messages[0].content[0].thinking, "deep thought");
+  assert.equal(result.messages[0].reasoning_content, undefined);
 });
 
 test("integration: no global summary on error stop", () => {
@@ -66,7 +63,7 @@ test("integration: no global summary on error stop", () => {
     registerTool: () => {}, registerCommand: () => {},
     appendEntry: () => {}
   });
-  events.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+  events.session_start({}, sessionCtx());
   events.context({ messages: [{ role: "user", content: "hi" }] });
   events.turn_end({ message: { stopReason: "error" } }, {
     getContextUsage: () => ({ contextWindow: 300, totalTokens: 250 }),

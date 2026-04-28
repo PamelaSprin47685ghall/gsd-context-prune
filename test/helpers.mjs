@@ -1,14 +1,15 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import contextPrunePlugin from "../index.js";
 
-export const withTmp = (fn) => {
-  const d = mkdtempSync(join(tmpdir(), "gsd-"));
-  try { return fn(d); } finally { rmSync(d, { recursive: true, force: true }); }
+export const makePlugin = () => {
+  const events = {};
+  contextPrunePlugin({
+    on: (e, cb) => { events[e] = cb; },
+    registerTool: () => {}, registerCommand: () => {}
+  });
+  return events;
 };
 
-export const withEnv = (k, v, fn) => {
-  const o = process.env[k];
-  v === undefined ? delete process.env[k] : process.env[k] = v;
-  try { return fn(); } finally { o === undefined ? delete process.env[k] : process.env[k] = o; }
-};
+export const sessionCtx = () => ({
+  ui: { notify: () => {} },
+  sessionManager: { getBranch: () => [] }
+});
