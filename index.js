@@ -120,22 +120,10 @@ export default function contextPrunePlugin(pi) {
     modified = injectCavemanBlock(modified);
     modified = injectHints(modified, getCodebaseDir());
 
-    // Inject caveman reminder + listing as the final assistant message so it
-    // reaches the provider directly without going through gsd-2's transformMessages
-    // (which runs between context and before_provider_request and would degrade
-    // the thinking block to plain text if modelInfo is unavailable).
-    for (let i = modified.length - 1; i >= 0; i--) {
-      if (modified[i].role === "user") {
-        modified[i].content = [
-          ...modified[i].content,
-          { "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }
-        ];
-      } else if (!modified[i].reasoning_content) {
-        modified[i].reasoning_content = `<think>${buildCavemanReminder()}</think>`
-      } else {
-        modified[i].reasoning_content += `\n<think>${buildCavemanReminder()}</think>`;
-      }
-    }
+    modified = [
+      ...modified,
+      { role: "system", content: "<think>${buildCavemanReminder()}</think>" }
+    ]
 
     let result = p;
     if (modified !== messages) {
