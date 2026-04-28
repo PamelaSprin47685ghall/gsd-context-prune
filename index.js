@@ -1,7 +1,7 @@
 import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
-import { buildCavemanBlock, injectCaveman } from "./src/caveman.js";
+import { buildCavemanBlock, buildCavemanReminder } from "./src/caveman.js";
 import { stripCodebase, stripMessages } from "./src/codebase.js";
-import { setCodebaseDir, getCodebaseDir, generateFileListing, injectListing } from "./src/listing.js";
+import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
 import { stabilizeIds } from "./src/ids.js";
 import { normalizeMessages } from "./src/normalize.js";
 import {
@@ -11,7 +11,7 @@ import {
 } from "./src/summary.js";
 import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 
-export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock, injectCaveman };
+export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock };
 
 function processPayload(payload, messages, isResponses) {
   const stripped = stripMessages(messages);
@@ -29,7 +29,6 @@ export function stabilizePayload(event) {
   if (!messages || messages.length < 2) return;
 
   let m = processPayload(p, messages, isResponses);
-  m = injectListing(m);
 
   if (isResponses) return { ...p, input: m };
   return { ...p, messages: m };
@@ -48,8 +47,14 @@ export default function contextPrunePlugin(pi) {
 
   pi.on("context", (event) => {
     const messages = event.messages || [];
-    const withListing = injectListing(messages);
-    return { messages: projectMessages(withListing) };
+    const projected = projectMessages(messages);
+    const listing = generateFileListing(getCodebaseDir());
+    let sysContent = "";
+    if (listing) {
+      sysContent = `$ du -hxd1\n${listing}\n`;
+    }
+    sysContent += buildCavemanReminder();
+    return { messages: [...projected, { role: "system", content: sysContent }] };
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -72,7 +77,6 @@ export default function contextPrunePlugin(pi) {
 
     let modified = processPayload(p, messages, isResponses);
     modified = injectHints(modified, getCodebaseDir());
-    modified = injectCaveman(modified);
 
     let result = p;
     if (modified !== messages) {

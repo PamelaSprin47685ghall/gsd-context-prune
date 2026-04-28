@@ -104,8 +104,8 @@ test("before_provider_request: injects HINTS into array-based system content", (
         ]
       }
     });
-    assert.ok(result.input[0].content[1].text.includes("[HINTS — Stable Guidance]"));
-    assert.ok(result.input[0].content[1].text.includes("array-hint"));
+    assert.ok(result.input[0].content[0].text.includes("[HINTS — Stable Guidance]"));
+    assert.ok(result.input[0].content[0].text.includes("array-hint"));
     assert.equal(result.input.length, 2);
   });
 })));

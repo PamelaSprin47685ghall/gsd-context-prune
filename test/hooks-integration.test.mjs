@@ -28,7 +28,8 @@ test("integration: session_start restores summaries, context projects them", () 
       { role: "toolResult", toolCallId: "call3", content: "raw 3" }
     ]
   });
-  assert.equal(result.messages.length, 4);
+  // +1 for appended system(reminder+listing) message
+  assert.equal(result.messages.length, 5);
   assert.equal(result.messages[0].role, "user");
   assert.equal(result.messages[1].toolCallId, "call1");
   assert.deepEqual(result.messages[1].content, []);
@@ -36,6 +37,9 @@ test("integration: session_start restores summaries, context projects them", () 
   assert.ok(result.messages[2].content[0].text.includes("test summary"));
   assert.equal(result.messages[3].toolCallId, "call3");
   assert.equal(result.messages[3].content, "raw 3");
+  // last message is the system reminder
+  assert.equal(result.messages[4].role, "system");
+  assert.ok(result.messages[4].content.includes("思考/回复必用极简中文"));
 });
 
 test("integration: context hook preserves one-shot pattern (no extra assistant msgs)", () => {
@@ -49,7 +53,10 @@ test("integration: context hook preserves one-shot pattern (no extra assistant m
     ]
   });
   assert.equal(result.messages.filter(m => m.role === "assistant").length, 0);
-  assert.equal(result.messages.length, 3);
+  // +1 for appended system(reminder) message
+  assert.equal(result.messages.length, 4);
+  assert.equal(result.messages[3].role, "system");
+  assert.ok(result.messages[3].content.includes("思考/回复必用极简中文"));
 });
 
 test("integration: no global summary on error stop", () => {

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { buildCavemanReminder } from "./caveman.js";
 
 let listingDir = process.cwd();
 
@@ -34,24 +33,4 @@ export function generateFileListing(dir) {
       } catch { return ""; }
     }).filter(Boolean).join("\n");
   } catch { return ""; }
-}
-
-export function injectListing(messages) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.role !== "user") continue;
-    const t = typeof m.content === "string"
-      ? m.content
-      : Array.isArray(m.content) ? m.content.map(c => c.text || "").join("") : "";
-    if (t.includes("<system-notification>")) return messages;
-    const list = generateFileListing(listingDir);
-    if (!list) return messages;
-    const notif = `\n\n<system-notification>\n$ du -hxd1\n${list}\n${buildCavemanReminder()}\n</system-notification>`;
-    const out = messages.map(x => ({ ...x }));
-    const u = out[i];
-    if (typeof u.content === "string") u.content += notif;
-    else if (Array.isArray(u.content)) u.content = [...u.content, { type: "text", text: notif }];
-    return out;
-  }
-  return messages;
 }
