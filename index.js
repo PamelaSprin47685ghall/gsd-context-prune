@@ -34,43 +34,53 @@ export function stabilizePayload(event) {
   return { ...p, messages: m };
 }
 
-const _cavemanReminder = buildCavemanReminder();
-const _listingMarker = "$ du -hxd1";
+/**
+ * 上下文精简化工具 - Context Prune
+ *
+ * 概要：在上下文中折叠工具调用输出为摘要，保留关键信息，释放上下文空间。
+ *
+ * 核心机制：
+ * - 监听 session_start 恢复持久化的摘要
+ * - 在 context 钩子中将 reasoning_content 迁移到 thinking 块（绕过 gsd-2 的清理）
+ * - 在 before_provider_request 注入 caveman 思维规则提示和文件列表
+ * - 在 turn_end 检查上下文占用率，触发全局摘要
+ * - 注册 context_prune 工具，供模型显式触发工具调用摘要
+ */
 
-// First-turn fallback: when modelInfo is unavailable, gsd-2's transformMessages
-// degrades the caveman thinking block to plain text.  Detect the combined
-// thinking text (reminder + <oracle> listing) by its unique markers, promote it
-// back to reasoning_content, and clear content.
-function fixDowngradedCaveman(messages) {
-  let changed = false;
-  const out = messages.map(m => {
-    if (m.role !== "assistant") return m;
-    if (m.reasoning_content) return m; // thinking survived, nothing to fix
-    const content = Array.isArray(m.content) ? m.content : [];
-    const block = content.find(c => typeof c.text === "string" && c.text.includes(_listingMarker) && c.text.includes(_cavemanReminder));
-    if (!block) return m;
-    changed = true;
-    return { ...m, reasoning_content: block.text, content: [{ type: "text", text: "<!-- cp-content -->" }] };
-  });
-  return changed ? out : messages;
+import { loadHintSources, buildHintsBlock, injectHints } from "./src/hints.js";
+import { buildCavemanBlock, buildCavemanReminder, injectCavemanBlock } from "./src/caveman.js";
+import { stripCodebase, stripMessages } from "./src/codebase.js";
+import { setCodebaseDir, getCodebaseDir, generateFileListing } from "./src/listing.js";
+import { stabilizeIds } from "./src/ids.js";
+import { normalizeMessages } from "./src/normalize.js";
+import {
+  setSummarizerModelId, getSummarizerModelId, isSummarizing, hasPendingToolCalls,
+  getPendingToolCalls, resetPendingToolCalls, getSummaries, restoreSummariesFromBranch,
+  projectMessages, triggerPrimarySummary, triggerGlobalSummary, collectToolCall
+} from "./src/summary.js";
+import { loadDefaultModelId, saveModelId } from "./src/settings.js";
+
+export { setCodebaseDir, generateFileListing, projectMessages, normalizeMessages, stabilizeIds, stripCodebase, loadHintSources, buildHintsBlock, buildCavemanBlock, injectCavemanBlock };
+
+function processPayload(payload, messages, isResponses) {
+  const stripped = stripMessages(messages);
+  const normalized = normalizeMessages(stripped, payload.reasoning_effort);
+  if (isResponses) return stabilizeIds(normalized);
+  return normalized;
 }
 
-const _cpPlaceholder = "<!-- cp-content -->";
+export function stabilizePayload(event) {
+  const p = event.payload;
+  if (!p || typeof p !== "object" || Array.isArray(p)) return;
 
-// Strip the placeholder text blocks that were only needed to bypass gsd-2's
-// content=null skip check in convertMessages.  Once we're past that gate in
-// before_provider_request they should be removed so they never reach the API.
-function stripPlaceholderContent(messages) {
-  let changed = false;
-  const out = messages.map(m => {
-    if (m.role !== "assistant") return m;
-    if (!Array.isArray(m.content)) return m;
-    const filtered = m.content.filter(c => c.type !== "text" || !c.text.includes(_cpPlaceholder));
-    if (filtered.length === m.content.length) return m;
-    changed = true;
-    return { ...m, content: filtered };
-  });
-  return changed ? out : messages;
+  const isResponses = Array.isArray(p.input);
+  const messages = isResponses ? p.input : Array.isArray(p.messages) ? p.messages : null;
+  if (!messages || messages.length < 2) return;
+
+  let m = processPayload(p, messages, isResponses);
+
+  if (isResponses) return { ...p, input: m };
+  return { ...p, messages: m };
 }
 
 export default function contextPrunePlugin(pi) {
@@ -98,33 +108,43 @@ export default function contextPrunePlugin(pi) {
       }
     }
 
+    // Migrate top-level reasoning_content into content[].thinking blocks on all
+    // assistant messages.  gsd-2's transformMessages strips top-level
+    // reasoning_content before before_provider_request runs; wrapping it in a
+    // thinking block earlier (here in context) preserves it.
+    const migrated = messages.map(m => {
+      if (m.role !== "assistant") return m;
+      if (!m.reasoning_content) return m;
+      const content = Array.isArray(m.content) ? [...m.content] : [];
+      const thinkingIdx = content.findIndex(c => c.type === "thinking");
+      if (thinkingIdx !== -1) {
+        content[thinkingIdx] = {
+          ...content[thinkingIdx],
+          thinking: m.reasoning_content + "\n" + content[thinkingIdx].thinking,
+        };
+      } else {
+        content.unshift({
+          type: "thinking",
+          thinking: m.reasoning_content,
+          thinkingSignature: "reasoning_content",
+        });
+      }
+      const { reasoning_content, ...rest } = m;
+      return { ...rest, content };
+    });
+
     // Backfill model info on existing messages whose thinking blocks would
     // otherwise be downgraded by transformMessages (isSameModel = false).
     const fixed = modelInfo
-      ? messages.map(m => {
+      ? migrated.map(m => {
         if (m.role !== "assistant") return m;
         if (m.provider) return m;
         if (!Array.isArray(m.content) || !m.content.some(b => b.type === "thinking")) return m;
         return { ...m, ...modelInfo };
       })
-      : messages;
+      : migrated;
 
-    const projected = projectMessages(fixed);
-    const listing = generateFileListing(getCodebaseDir());
-    return {
-      messages: [
-        ...projected,
-        {
-          role: "assistant",
-          // Inject model info so the thinking block survives transformMessages
-          ...(modelInfo || {}),
-          content: [
-            { type: "thinking", thinking: `${buildCavemanReminder()}\n\n<oracle>$ du -hxd1\n${listing}\n</oracle>`, thinkingSignature: "reasoning_content" },
-            { type: "text", text: "<!-- cp-content -->" },
-          ],
-        },
-      ],
-    };
+    return { messages: projectMessages(fixed) };
   });
 
   pi.on("turn_end", (event, ctx) => {
@@ -149,14 +169,19 @@ export default function contextPrunePlugin(pi) {
     modified = injectCavemanBlock(modified);
     modified = injectHints(modified, getCodebaseDir());
 
-    // First-turn fallback: no modelInfo → thinking block downgraded to text by
-    // transformMessages.  Detect the caveman message and hand-fix reasoning_content.
-    modified = fixDowngradedCaveman(modified);
-
-    // Strip <!-- cp-content --> placeholders from all assistant messages so they
-    // never reach the provider API.  The content was only needed to bypass gsd-2's
-    // content=null skip in convertMessages — once we're past that gate, clean it up.
-    modified = stripPlaceholderContent(modified);
+    // Inject caveman reminder + listing as the final assistant message so it
+    // reaches the provider directly without going through gsd-2's transformMessages
+    // (which runs between context and before_provider_request and would degrade
+    // the thinking block to plain text if modelInfo is unavailable).
+    const listing = generateFileListing(getCodebaseDir());
+    modified = [
+      ...modified,
+      {
+        role: "assistant",
+        reasoning_content: `${buildCavemanReminder()}\n\n<oracle>$ du -hxd1\n${listing}\n</oracle>`,
+        content: []
+      },
+    ];
 
     let result = p;
     if (modified !== messages) {
