@@ -77,19 +77,28 @@ export default function contextPrunePlugin(pi) {
     const p = e.payload;
     if (!p) return p;
 
-    const msgs = 'input' in p ? p.input : p.messages;
+    const isResponsesApi = "input" in p;
+    const msgs = isResponsesApi ? p.input : p.messages;
     if (!Array.isArray(msgs)) return p;
 
-    const shallow = msgs.map(m => (m && typeof m === "object") ? { ...m } : m);
-    if ("input" in p) p.input = shallow; else p.messages = shallow;
+    const modelName = String(p.model || "");
+    const shouldInjectReasoningContent = /deepseek/i.test(modelName);
 
-    if (/deepseek/i.test(p.model || "")) {
-      for (const m of shallow)
-        if (m && m.role === "assistant" && !("reasoning_content" in m))
-          m.reasoning_content = "";
+    if (shouldInjectReasoningContent) {
+      let changed = false;
+      const patched = msgs.map(m => {
+        if (!m || typeof m !== "object") return m;
+        if (m.role !== "assistant" || "reasoning_content" in m) return m;
+        changed = true;
+        return { ...m, reasoning_content: "" };
+      });
+      if (changed) {
+        if (isResponsesApi) p.input = patched;
+        else p.messages = patched;
+      }
     }
 
-    if ("input" in p) delete p.prompt_cache_key;
+    if (isResponsesApi) delete p.prompt_cache_key;
     return p;
   });
 

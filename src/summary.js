@@ -4,6 +4,9 @@ export function createSummarizer() {
     pendingToolCalls: [],
     summarizing: false,
     summarizerModelId: "default",
+    summaryQueue: Promise.resolve(),
+    queuedGlobalSignature: null,
+    lastGlobalSignature: null,
   };
 
   function setSummarizerModelId(id) { state.summarizerModelId = id; }
@@ -25,17 +28,31 @@ export function createSummarizer() {
     state.pendingToolCalls.length = 0;
     state.summarizing = false;
     state.summarizerModelId = "default";
+    state.summaryQueue = Promise.resolve();
+    state.queuedGlobalSignature = null;
+    state.lastGlobalSignature = null;
   }
 
   function restoreSummariesFromBranch(branchEntries) {
     state.summaries = [];
+    let latestGlobal = null;
     for (const entry of branchEntries || []) {
       if (entry.type !== "custom") continue;
       if (entry.customType === "context-prune-primary-data")
         state.summaries.push({ type: "primary", ...entry.data, toolCallIds: entry.data.toolCallIds });
       if (entry.customType === "context-prune-global-data")
-        state.summaries.push({ type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) });
+        latestGlobal = { type: "global", ...entry.data, collapsedIds: new Set(entry.data.collapsedIds) };
     }
+    if (latestGlobal) {
+      state.summaries = state.summaries.filter(s => s.type !== "global");
+      state.summaries.push(latestGlobal);
+      const globalIds = [...latestGlobal.collapsedIds];
+      state.lastGlobalSignature = globalIds.length > 0 ? `${globalIds.length}:${globalIds[globalIds.length - 1]}` : null;
+    } else {
+      state.lastGlobalSignature = null;
+    }
+    state.queuedGlobalSignature = null;
+    state.summaryQueue = Promise.resolve();
   }
 
   function projectMessages(messages) {
@@ -141,7 +158,15 @@ export function createSummarizer() {
   }
 
   async function triggerGlobalSummary(ctx, pi, projectedMessages) {
-    state.summaryQueue = state.summaryQueue.then(async () => {
+    const collapsedIds = projectedMessages.map(m => m.id).filter(Boolean);
+    if (collapsedIds.length === 0) return;
+
+    const signature = `${collapsedIds.length}:${collapsedIds[collapsedIds.length - 1]}`;
+    if (signature === state.lastGlobalSignature || signature === state.queuedGlobalSignature) return;
+
+    state.queuedGlobalSignature = signature;
+
+    state.summaryQueue = state.summaryQueue.catch(() => {}).then(async () => {
       if (!tryStartSummarizing()) {
         ctx?.ui?.notify("pruner: 上一轮精简仍在进行中，跳过本次全局精简。", "info");
         return;
@@ -166,23 +191,38 @@ export function createSummarizer() {
           messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
         }, { apiKey, headers: model.headers });
         const summaryText = res.content.map(c => c.text).join("\n");
-        const collapsedIds = new Set(projectedMessages.map(m => m.id).filter(Boolean));
-        state.summaries.push({ type: "global", collapsedIds, text: summaryText, timestamp: Date.now() });
-        pi.appendEntry("context-prune-global-data", { collapsedIds: [...collapsedIds], text: summaryText, timestamp: Date.now() });
+        const collapsedIdSet = new Set(collapsedIds);
+        const timestamp = Date.now();
+        state.summaries = state.summaries.filter(s => s.type !== "global");
+        state.summaries.push({ type: "global", collapsedIds: collapsedIdSet, text: summaryText, timestamp });
+        pi.appendEntry("context-prune-global-data", { collapsedIds, text: summaryText, timestamp });
+        state.lastGlobalSignature = signature;
         ctx?.ui?.notify("pruner: 高级精简完成，历史已被折叠。", "success");
       } catch (err) {
         ctx?.ui?.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
-      } finally { state.summarizing = false; }
+      } finally {
+        state.summarizing = false;
+        if (state.queuedGlobalSignature === signature) state.queuedGlobalSignature = null;
+      }
     });
+
+    return state.summaryQueue;
   }
 
   function collectToolCall(event) {
     const content = Array.isArray(event.message?.content) ? event.message.content : [];
     const toolCalls = content.filter(b => b.type === "toolCall");
     const toolResults = event.toolResults || [];
+    const toolResultById = new Map();
+
+    for (const toolResult of toolResults) {
+      const id = toolResult.toolCallId || toolResult.id;
+      if (id && !toolResultById.has(id)) toolResultById.set(id, toolResult);
+    }
+
     for (const tc of toolCalls) {
       const id = tc.id || tc.toolCallId;
-      const res = toolResults.find(r => r.toolCallId === id || r.id === id);
+      const res = toolResultById.get(id);
       if (res) {
         state.pendingToolCalls.push({
           id, name: tc.name || tc.toolName,

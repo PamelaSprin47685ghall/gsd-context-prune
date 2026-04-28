@@ -165,3 +165,27 @@ test("restoreSummariesFromBranch: empty branch yields empty summaries", () => {
   sz.restoreSummariesFromBranch([]);
   assert.equal(sz.getSummaries().length, 0);
 });
+
+test("restoreSummariesFromBranch: keeps only latest global summary", () => {
+  const { sz } = makeSummarizer();
+  sz.restoreSummariesFromBranch([
+    { type: "custom", customType: "context-prune-global-data",
+      data: { collapsedIds: ["x1"], text: "old", timestamp: 1000 } },
+    { type: "custom", customType: "context-prune-global-data",
+      data: { collapsedIds: ["x2"], text: "new", timestamp: 2000 } }
+  ]);
+
+  const globals = sz.getSummaries().filter(s => s.type === "global");
+  assert.equal(globals.length, 1);
+  assert.equal(globals[0].text, "new");
+});
+
+test("triggerGlobalSummary: no-op when projected messages have no ids", async () => {
+  const { sz } = makeSummarizer();
+  await sz.triggerGlobalSummary(
+    { ui: { notify: () => {} }, model: {} },
+    { appendEntry: () => {} },
+    [{ role: "user", content: "hello" }]
+  );
+  assert.equal(sz.getSummaries().length, 0);
+});

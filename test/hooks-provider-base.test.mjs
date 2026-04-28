@@ -67,11 +67,11 @@ test("before_provider_request — Messages API: preserves prompt_cache_key", () 
   assert.equal(result.prompt_cache_key, "session_xyz");
 });
 
-test("before_provider_request: only injects reasoning_content for assistant messages", () => {
+test("before_provider_request: only injects reasoning_content for deepseek assistant messages", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
-    payload: { model: "gpt-4o", messages: [
+    payload: { model: "deepseek-chat", messages: [
       { role: "system", content: "sys" },
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" }
@@ -95,11 +95,11 @@ test("before_provider_request: skips reasoning_content for Anthropic/Claude mode
   assert.equal("reasoning_content" in result.messages[1], false);
 });
 
-test("before_provider_request: skips reasoning_content when provider contains anthropic", () => {
+test("before_provider_request: skips reasoning_content for non-deepseek models", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
-    payload: { model: "some-model", provider: "anthropic", messages: [
+    payload: { model: "gpt-4o", provider: "anthropic", messages: [
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" }
     ] }
@@ -112,9 +112,9 @@ test("before_provider_request: does not mutate original payload messages array",
   events.session_start({}, sessionCtx());
   const original = [
     { role: "system", content: "sys" },
-    { role: "user", content: "hello" }
+    { role: "assistant", content: "hello" }
   ];
-  const payload = { model: "gpt-4o", messages: original };
+  const payload = { model: "deepseek-chat", messages: original };
   events.before_provider_request({ payload });
   assert.equal("reasoning_content" in original[1], false);
 });
