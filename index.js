@@ -128,7 +128,7 @@ export default function contextPrunePlugin(pi) {
       if (modified[i].role === "user") {
         modified[i].content = [
           ...modified[i].content,
-          `<think>${buildCavemanReminder()}</think>`
+          { "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }
         ];
       } else if (!modified[i].reasoning_content) {
         modified[i].reasoning_content = `<think>${buildCavemanReminder()}</think>`
