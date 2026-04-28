@@ -124,14 +124,24 @@ export default function contextPrunePlugin(pi) {
     // reaches the provider directly without going through gsd-2's transformMessages
     // (which runs between context and before_provider_request and would degrade
     // the thinking block to plain text if modelInfo is unavailable).
-    modified = [
-      ...modified,
-      {
-        role: "assistant",
-        reasoning_content: buildCavemanReminder(),
-        content: []
-      },
-    ];
+    if (modified.last()?.role === "user") {
+      modified = [
+        ...modified,
+        {
+          role: "user",
+          content: [`<think>${buildCavemanReminder()}</think>`]
+        },
+      ];
+    } else {
+      modified = [
+        ...modified,
+        {
+          role: "assistant",
+          reasoning_content: buildCavemanReminder(),
+          content: []
+        },
+      ];
+    }
 
     let result = p;
     if (modified !== messages) {
