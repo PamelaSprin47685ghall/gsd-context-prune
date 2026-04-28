@@ -53,7 +53,7 @@ export default function contextPrunePlugin(pi) {
     if (listing) {
       sysContent += `<system>\n$ du -hxd1\n${listing}\n</system>`;
     }
-    return { messages: [...projected, { role: "assistant", reasoning_content: sysContent }] };
+    return { messages: [...projected, { role: "assistant", reasoning_content: sysContent, content: [] }] };
   });
 
   pi.on("turn_end", (event, ctx) => {
