@@ -137,8 +137,7 @@ export default function contextPrunePlugin(pi) {
         ...modified,
         {
           role: "assistant",
-          reasoning_content: buildCavemanReminder(),
-          content: [],
+          content: [{ "type": "text", "text": `<think>${buildCavemanReminder()}</think>` }],
         },
       ];
     }
