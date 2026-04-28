@@ -68,7 +68,7 @@ function stripPlaceholderContent(messages) {
     const filtered = m.content.filter(c => c.type !== "text" || !c.text.includes(_cpPlaceholder));
     if (filtered.length === m.content.length) return m;
     changed = true;
-    return { ...m, content: filtered.length > 0 ? filtered : null };
+    return { ...m, content: filtered };
   });
   return changed ? out : messages;
 }
@@ -102,11 +102,11 @@ export default function contextPrunePlugin(pi) {
     // otherwise be downgraded by transformMessages (isSameModel = false).
     const fixed = modelInfo
       ? messages.map(m => {
-          if (m.role !== "assistant") return m;
-          if (m.provider) return m;
-          if (!Array.isArray(m.content) || !m.content.some(b => b.type === "thinking")) return m;
-          return { ...m, ...modelInfo };
-        })
+        if (m.role !== "assistant") return m;
+        if (m.provider) return m;
+        if (!Array.isArray(m.content) || !m.content.some(b => b.type === "thinking")) return m;
+        return { ...m, ...modelInfo };
+      })
       : messages;
 
     const projected = projectMessages(fixed);
