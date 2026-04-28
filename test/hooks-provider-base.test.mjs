@@ -71,15 +71,50 @@ test("before_provider_request: only injects reasoning_content for assistant mess
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
-    payload: { model: "test",
-      messages: [
-        { role: "system", content: "sys" },
-        { role: "user", content: "hello" },
-        { role: "assistant", content: "hi" }
-      ]
-    }
+    payload: { model: "gpt-4o", messages: [
+      { role: "system", content: "sys" },
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" }
+    ] }
   });
   assert.equal("reasoning_content" in result.messages[0], false);
   assert.equal("reasoning_content" in result.messages[1], false);
   assert.equal(result.messages[2].reasoning_content, "");
+  assert.equal("reasoning_content" in result.messages[2], true);
+});
+
+test("before_provider_request: skips reasoning_content for Anthropic/Claude models", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "claude-sonnet-4", messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" }
+    ] }
+  });
+  assert.equal("reasoning_content" in result.messages[1], false);
+});
+
+test("before_provider_request: skips reasoning_content when provider contains anthropic", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "some-model", provider: "anthropic", messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: "hi" }
+    ] }
+  });
+  assert.equal("reasoning_content" in result.messages[1], false);
+});
+
+test("before_provider_request: does not mutate original payload messages array", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const original = [
+    { role: "system", content: "sys" },
+    { role: "user", content: "hello" }
+  ];
+  const payload = { model: "gpt-4o", messages: original };
+  events.before_provider_request({ payload });
+  assert.equal("reasoning_content" in original[1], false);
 });

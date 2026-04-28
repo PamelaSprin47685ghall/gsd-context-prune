@@ -96,15 +96,26 @@ export default function contextPrunePlugin(pi) {
     const p = e.payload;
     if (!p) return p;
 
-    // Ensure every assistant message has a reasoning_content field so providers don't choke
     const msgs = 'input' in p ? p.input : p.messages;
-    if (Array.isArray(msgs))
-      for (const m of msgs)
-        if (m && typeof m === 'object' && m.role === 'assistant' && !('reasoning_content' in m))
+    if (!Array.isArray(msgs)) return p;
+
+    // Anthropic protocol uses thinking blocks natively — skip injection
+    const model = p.model || "";
+    const isAnthropic = /claude/i.test(model) || /anthropic/i.test(p.provider || "");
+
+    // Shallow-copy so we don't mutate the original payload
+    const shallow = msgs.map(m => (m && typeof m === "object") ? { ...m } : m);
+    if ("input" in p) p.input = shallow; else p.messages = shallow;
+
+    // Inject reasoning_content only for non-Anthropic providers
+    if (!isAnthropic) {
+      for (const m of shallow)
+        if (m && m.role === "assistant" && !("reasoning_content" in m))
           m.reasoning_content = "";
+    }
 
     // Strip random sessionId so same content hits same cache across sessions
-    if ('input' in p) delete p.prompt_cache_key;
+    if ("input" in p) delete p.prompt_cache_key;
     return p;
   });
 
