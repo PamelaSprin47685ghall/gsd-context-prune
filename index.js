@@ -54,6 +54,7 @@ export default function contextPrunePlugin(pi) {
       sysContent = `$ du -hxd1\n${listing}\n`;
     }
     sysContent += buildCavemanReminder();
+    sysContent = `<system>${sysContent}</system>`;
     return { messages: [...projected, { role: "user", content: sysContent }] };
   });
 
