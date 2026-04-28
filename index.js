@@ -122,7 +122,9 @@ export default function contextPrunePlugin(pi) {
 
     modified = [
       ...modified,
-      { role: "system", content: `<think>${buildCavemanBlock()}</think>` }
+      {
+        role: "system", content: `${buildCavemanReminder()}就像这样：<think>${buildCavemanReminder()}</think>`
+      }
     ]
 
     let result = p;
@@ -159,7 +161,7 @@ export default function contextPrunePlugin(pi) {
         saveModelId(arg);
         ctx.ui.notify(`pruner: 伴随模型已切换为 ${arg}`, "info");
       } else {
-        ctx.ui.notify(`pruner: 当前伴随模型为 ${getSummarizerModelId()}。用法: /pruner provider/model-id`, "info");
+        ctx.ui.notify(`pruner: 当前伴随模型为 ${getSummarizerModelId()}。用法: /pruner provider/model - id`, "info");
       }
     }
   });
