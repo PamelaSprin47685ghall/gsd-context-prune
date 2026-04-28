@@ -124,12 +124,11 @@ export default function contextPrunePlugin(pi) {
     // reaches the provider directly without going through gsd-2's transformMessages
     // (which runs between context and before_provider_request and would degrade
     // the thinking block to plain text if modelInfo is unavailable).
-    const listing = generateFileListing(getCodebaseDir());
     modified = [
       ...modified,
       {
         role: "assistant",
-        reasoning_content: `${buildCavemanReminder()}\n\n<system-notification>$ du -hxd1\n${listing}\n</system-notification>`,
+        reasoning_content: buildCavemanReminder(),
         content: []
       },
     ];
