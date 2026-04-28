@@ -55,6 +55,24 @@ function fixDowngradedCaveman(messages) {
   return changed ? out : messages;
 }
 
+const _cpPlaceholder = "<!-- cp-content -->";
+
+// Strip the placeholder text blocks that were only needed to bypass gsd-2's
+// content=null skip check in convertMessages.  Once we're past that gate in
+// before_provider_request they should be removed so they never reach the API.
+function stripPlaceholderContent(messages) {
+  let changed = false;
+  const out = messages.map(m => {
+    if (m.role !== "assistant") return m;
+    if (!Array.isArray(m.content)) return m;
+    const filtered = m.content.filter(c => c.type !== "text" || !c.text.includes(_cpPlaceholder));
+    if (filtered.length === m.content.length) return m;
+    changed = true;
+    return { ...m, content: filtered.length > 0 ? filtered : null };
+  });
+  return changed ? out : messages;
+}
+
 export default function contextPrunePlugin(pi) {
   setSummarizerModelId(loadDefaultModelId());
 
@@ -134,6 +152,11 @@ export default function contextPrunePlugin(pi) {
     // First-turn fallback: no modelInfo → thinking block downgraded to text by
     // transformMessages.  Detect the caveman message and hand-fix reasoning_content.
     modified = fixDowngradedCaveman(modified);
+
+    // Strip <!-- cp-content --> placeholders from all assistant messages so they
+    // never reach the provider API.  The content was only needed to bypass gsd-2's
+    // content=null skip in convertMessages — once we're past that gate, clean it up.
+    modified = stripPlaceholderContent(modified);
 
     let result = p;
     if (modified !== messages) {
