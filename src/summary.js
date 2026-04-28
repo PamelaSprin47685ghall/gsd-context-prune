@@ -33,54 +33,56 @@ export function restoreSummariesFromBranch(branchEntries) {
 
 export function projectMessages(messages) {
   let result = messages;
-  for (const s of state.summaries) {
-    if (s.type === "primary") {
-      const ids = new Set(s.toolCallIds);
-      let pos = -1, keep = [];
-      for (const m of result) {
-        if (m.role === "toolResult" && ids.has(m.toolCallId || m.id)) {
-          if ((m.toolCallId || m.id) === s.latestId) pos = keep.length;
-          keep.push({ ...m, content: [] });
-          continue;
-        }
-        keep.push(m);
-      }
-      if (pos !== -1) {
-        keep[pos] = {
-          ...keep[pos],
-          content: [{ type: "text", text: `【初级精简摘要】\n${s.text}` }]
-        };
-      }
-      result = keep;
+
+  // Phase 1: Primary summaries — O(n) single pass for all
+  const primarySummaries = state.summaries.filter(s => s.type === "primary");
+  if (primarySummaries.length > 0) {
+    const toClear = new Map(); // toolCallId -> summary text or null
+    for (const s of primarySummaries) {
+      for (const id of s.toolCallIds) toClear.set(id, null);
+      toClear.set(s.latestId, s.text); // later summaries override earlier ones
     }
-    if (s.type === "global") {
-      const ids = s.collapsedIds;
-      let kept = [], inserted = false;
-      let afterSys = -1;
-      for (let i = 0; i < result.length; i++) {
-        const m = result[i];
-        if (m.role === "system" || m.role === "developer") {
-          kept.push(m);
-          if (afterSys === -1) afterSys = kept.length;
-          continue;
-        }
-        if (m.id && ids.has(m.id)) {
-          if (!inserted && afterSys !== -1) {
-            kept.splice(afterSys, 0, {
-              id: `global-sum-${s.timestamp}`, role: "assistant",
-              content: [{ type: "text", text: `【高级精简：世界线坍缩】\n${s.text}` }]
-            });
-            afterSys++;
-            inserted = true;
-          }
-          kept.push({ ...m, content: [] });
-          continue;
-        }
-        kept.push(m);
-      }
-      result = kept;
-    }
+    result = result.map(m => {
+      if (m.role !== "toolResult") return m;
+      const id = m.toolCallId || m.id;
+      const text = toClear.get(id);
+      if (text === undefined) return m;
+      return text !== null
+        ? { ...m, content: [{ type: "text", text: `【初级精简摘要】\n${text}` }] }
+        : { ...m, content: [] };
+    });
   }
+
+  // Phase 2: Global summaries — sequential (each structurally modifies the array)
+  for (const s of state.summaries) {
+    if (s.type !== "global") continue;
+    const ids = s.collapsedIds;
+    let kept = [], inserted = false;
+    let afterSys = -1;
+    for (let i = 0; i < result.length; i++) {
+      const m = result[i];
+      if (m.role === "system" || m.role === "developer") {
+        kept.push(m);
+        if (afterSys === -1) afterSys = kept.length;
+        continue;
+      }
+      if (m.id && ids.has(m.id)) {
+        if (!inserted && afterSys !== -1) {
+          kept.splice(afterSys, 0, {
+            id: `global-sum-${s.timestamp}`, role: "assistant",
+            content: [{ type: "text", text: `【高级精简：世界线坍缩】\n${s.text}` }]
+          });
+          afterSys++;
+          inserted = true;
+        }
+        kept.push({ ...m, content: [] });
+        continue;
+      }
+      kept.push(m);
+    }
+    result = kept;
+  }
+
   return result;
 }
 

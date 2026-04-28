@@ -103,8 +103,13 @@ export default function contextPrunePlugin(pi) {
     handler: async (arg, ctx) => {
       if (arg.length > 0) {
         setSummarizerModelId(arg);
-        saveModelId(arg);
-        ctx.ui.notify(`pruner: 伴随模型已切换为 ${arg}`, "info");
+        const saved = saveModelId(arg);
+        ctx.ui.notify(
+          saved
+            ? `pruner: 伴随模型已切换为 ${arg}`
+            : `pruner: 模型已切换为 ${arg}，但持久化失败`,
+          saved ? "info" : "warning"
+        );
       } else {
         ctx.ui.notify(`pruner: 当前伴随模型为 ${getSummarizerModelId()}。用法: /pruner provider/model - id`, "info");
       }
