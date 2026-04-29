@@ -105,12 +105,9 @@ export default function contextPrunePlugin(pi) {
     {
       let changed = false;
       const patched = msgs.map(m => {
-        if (!m || typeof m !== "object" || m.role !== "assistant") return m;
+        if (!m || typeof m !== "object") return m;
         if ("reasoning_content" in m) return m;
-
-        const hasToolCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
-        const hasToolUse = Array.isArray(m.content) && m.content.some(b => b?.type === "tool_use");
-        if (!hasToolCalls && !hasToolUse) return m;
+        if (m.role === "user") return m;
 
         let reasoning = "";
         if (Array.isArray(m.content)) {
