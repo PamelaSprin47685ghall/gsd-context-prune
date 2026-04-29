@@ -88,7 +88,7 @@ export default function contextPrunePlugin(pi) {
     return { action: "continue" };
   });
 
-  // ── Provider request: reasoning_content injection + prompt_cache cleanup ──
+  // ── Provider request: ensure reasoning_content on tool-call messages ──
   pi.on("before_provider_request", (e) => {
     const p = e.payload;
     if (!p) return p;
@@ -97,16 +97,39 @@ export default function contextPrunePlugin(pi) {
     const msgs = isResponsesApi ? p.input : p.messages;
     if (!Array.isArray(msgs)) return p;
 
-    const modelName = String(p.model || "");
-    const shouldInjectReasoningContent = /deepseek/i.test(modelName);
+    // Detect if thinking/reasoning is enabled in this request.
+    // When thinking is on, some providers / proxies validate that every
+    // assistant message with tool calls also carries reasoning_content.
+    // gsd-2 core may serialise thinking under a wrong key ("think-tag") or
+    // drop it entirely (no thinkingSignature) — we fix both here.
+    const thinkingEnabled = Boolean(
+      p.thinking ||                // anthropic: {type: "enabled|adaptive", ...}
+      p.reasoning_effort ||        // openai-completions: "high|medium|low"
+      p.reasoning ||               // llama.cpp / some proxies
+      p.enable_thinking            // zai / qwen format
+    );
 
-    if (shouldInjectReasoningContent) {
+    if (thinkingEnabled) {
       let changed = false;
       const patched = msgs.map(m => {
-        if (!m || typeof m !== "object") return m;
-        if (m.role !== "assistant" || "reasoning_content" in m) return m;
+        if (!m || typeof m !== "object" || m.role !== "assistant") return m;
+        if ("reasoning_content" in m) return m;
+
+        const hasToolCalls = Array.isArray(m.tool_calls) && m.tool_calls.length > 0;
+        const hasToolUse = Array.isArray(m.content) && m.content.some(b => b?.type === "tool_use");
+        if (!hasToolCalls && !hasToolUse) return m;
+
+        let reasoning = "";
+        if (Array.isArray(m.content)) {
+          const texts = m.content
+            .filter(b => b?.type === "thinking")
+            .map(b => b.thinking || "")
+            .filter(Boolean);
+          if (texts.length > 0) reasoning = texts.join("\n");
+        }
+
         changed = true;
-        return { ...m, reasoning_content: "" };
+        return { ...m, reasoning_content: reasoning };
       });
       if (changed) {
         if (isResponsesApi) p.input = patched;

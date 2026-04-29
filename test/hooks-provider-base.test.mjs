@@ -67,29 +67,29 @@ test("before_provider_request — Messages API: preserves prompt_cache_key", () 
   assert.equal(result.prompt_cache_key, "session_xyz");
 });
 
-test("before_provider_request: only injects reasoning_content for deepseek assistant messages", () => {
+test("before_provider_request: injects reasoning_content when thinking is enabled and message has tool calls", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
-    payload: { model: "deepseek-chat", messages: [
+    payload: { model: "deepseek-chat", reasoning_effort: "high", messages: [
       { role: "system", content: "sys" },
       { role: "user", content: "hello" },
-      { role: "assistant", content: "hi" }
+      { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] }
     ] }
   });
   assert.equal("reasoning_content" in result.messages[0], false);
   assert.equal("reasoning_content" in result.messages[1], false);
-  assert.equal(result.messages[2].reasoning_content, "");
   assert.equal("reasoning_content" in result.messages[2], true);
+  assert.equal(result.messages[2].reasoning_content, "");
 });
 
-test("before_provider_request: skips reasoning_content for Anthropic/Claude models", () => {
+test("before_provider_request: skips reasoning_content when thinking is not enabled", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
     payload: { model: "claude-sonnet-4", messages: [
       { role: "user", content: "hello" },
-      { role: "assistant", content: "hi" }
+      { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "read", input: {} }] }
     ] }
   });
   assert.equal("reasoning_content" in result.messages[1], false);
@@ -107,14 +107,58 @@ test("before_provider_request: skips reasoning_content for non-deepseek models",
   assert.equal("reasoning_content" in result.messages[1], false);
 });
 
+test("before_provider_request: injects reasoning_content for Anthropic format with tool_use when thinking enabled", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "claude-sonnet-4-5", thinking: { type: "enabled", budget_tokens: 1024 }, messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [
+        { type: "thinking", thinking: "deep thought", signature: "sig_abc" },
+        { type: "text", text: "answer" },
+        { type: "tool_use", id: "tu_1", name: "read", input: {} }
+      ] }
+    ] }
+  });
+  assert.equal("reasoning_content" in result.messages[1], true);
+  assert.equal(result.messages[1].reasoning_content, "deep thought");
+});
+
+test("before_provider_request: injects empty reasoning_content for Anthropic format with tool_use but no thinking blocks", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "claude-sonnet-4-5", thinking: { type: "enabled", budget_tokens: 1024 }, messages: [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [
+        { type: "text", text: "no thinking" },
+        { type: "tool_use", id: "tu_1", name: "read", input: {} }
+      ] }
+    ] }
+  });
+  assert.equal("reasoning_content" in result.messages[1], true);
+  assert.equal(result.messages[1].reasoning_content, "");
+});
+
+test("before_provider_request: skips messages that already have reasoning_content", () => {
+  const events = makePlugin();
+  events.session_start({}, sessionCtx());
+  const result = events.before_provider_request({
+    payload: { model: "deepseek-chat", reasoning_effort: "high", messages: [
+      { role: "assistant", content: null, tool_calls: [{ id: "c_1", type: "function", function: { name: "x", arguments: "{}" } }], reasoning_content: "already there" }
+    ] }
+  });
+  assert.equal(result.messages[0].reasoning_content, "already there");
+});
+
 test("before_provider_request: does not mutate original payload messages array", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const original = [
     { role: "system", content: "sys" },
-    { role: "assistant", content: "hello" }
+    { role: "assistant", content: null, tool_calls: [{ id: "c_1", type: "function", function: { name: "x", arguments: "{}" } }] }
   ];
-  const payload = { model: "deepseek-chat", messages: original };
+  const payload = { model: "deepseek-chat", reasoning_effort: "high", messages: original };
   events.before_provider_request({ payload });
   assert.equal("reasoning_content" in original[1], false);
 });
