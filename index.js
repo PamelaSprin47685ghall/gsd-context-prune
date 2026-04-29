@@ -97,19 +97,12 @@ export default function contextPrunePlugin(pi) {
     const msgs = isResponsesApi ? p.input : p.messages;
     if (!Array.isArray(msgs)) return p;
 
-    // Detect if thinking/reasoning is enabled in this request.
-    // When thinking is on, some providers / proxies validate that every
-    // assistant message with tool calls also carries reasoning_content.
-    // gsd-2 core may serialise thinking under a wrong key ("think-tag") or
-    // drop it entirely (no thinkingSignature) — we fix both here.
-    const thinkingEnabled = Boolean(
-      p.thinking ||                // anthropic: {type: "enabled|adaptive", ...}
-      p.reasoning_effort ||        // openai-completions: "high|medium|low"
-      p.reasoning ||               // llama.cpp / some proxies
-      p.enable_thinking            // zai / qwen format
-    );
-
-    if (thinkingEnabled) {
+    // Some providers / proxies validate that every assistant message with
+    // tool calls also carries reasoning_content when thinking/reasoning is
+    // enabled.  gsd-2 core may serialise thinking under a wrong key
+    // ("think-tag") or drop it entirely (no thinkingSignature) — we patch
+    // the field unconditionally so the validation always passes.
+    {
       let changed = false;
       const patched = msgs.map(m => {
         if (!m || typeof m !== "object" || m.role !== "assistant") return m;

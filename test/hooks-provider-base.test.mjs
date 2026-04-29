@@ -83,7 +83,7 @@ test("before_provider_request: injects reasoning_content when thinking is enable
   assert.equal(result.messages[2].reasoning_content, "");
 });
 
-test("before_provider_request: skips reasoning_content when thinking is not enabled", () => {
+test("before_provider_request: injects reasoning_content for tool_use messages even without thinking flag", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
@@ -92,7 +92,8 @@ test("before_provider_request: skips reasoning_content when thinking is not enab
       { role: "assistant", content: [{ type: "tool_use", id: "tu_1", name: "read", input: {} }] }
     ] }
   });
-  assert.equal("reasoning_content" in result.messages[1], false);
+  assert.equal("reasoning_content" in result.messages[1], true);
+  assert.equal(result.messages[1].reasoning_content, "");
 });
 
 test("before_provider_request: skips reasoning_content for non-deepseek models", () => {
