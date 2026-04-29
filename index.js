@@ -1,7 +1,22 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { buildStablePrompt, buildHintsBlock, loadHintSources } from "./src/inject.js";
 import { generateFileListing } from "./src/fs.js";
 import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 import { createSummarizer } from "./src/summary.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// ─── Self-inject into subagent environment ───
+// Ensures subagents spawned via the 'subagent' tool also load this plugin.
+// The subagent tool in gsd-2 inherits process.env and uses GSD_BUNDLED_EXTENSION_PATHS
+// to build the --extension arguments for the child process.
+const bundled = process.env.GSD_BUNDLED_EXTENSION_PATHS || "";
+if (!bundled.includes(__dirname)) {
+  process.env.GSD_BUNDLED_EXTENSION_PATHS = bundled
+    ? `${bundled}${path.delimiter}${__dirname}`
+    : __dirname;
+}
 
 export { generateFileListing, createSummarizer, loadHintSources, buildHintsBlock };
 
