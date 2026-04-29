@@ -77,7 +77,8 @@ test("before_provider_request: injects reasoning_content when thinking is enable
       { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: "{}" } }] }
     ] }
   });
-  assert.equal("reasoning_content" in result.messages[0], false);
+  assert.equal("reasoning_content" in result.messages[0], true);
+  assert.equal(result.messages[0].reasoning_content, "");
   assert.equal("reasoning_content" in result.messages[1], false);
   assert.equal("reasoning_content" in result.messages[2], true);
   assert.equal(result.messages[2].reasoning_content, "");
@@ -96,7 +97,7 @@ test("before_provider_request: injects reasoning_content for tool_use messages e
   assert.equal(result.messages[1].reasoning_content, "");
 });
 
-test("before_provider_request: skips reasoning_content for non-deepseek models", () => {
+test("before_provider_request: injects reasoning_content for all non-user messages", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
   const result = events.before_provider_request({
@@ -105,7 +106,8 @@ test("before_provider_request: skips reasoning_content for non-deepseek models",
       { role: "assistant", content: "hi" }
     ] }
   });
-  assert.equal("reasoning_content" in result.messages[1], false);
+  assert.equal("reasoning_content" in result.messages[1], true);
+  assert.equal(result.messages[1].reasoning_content, "");
 });
 
 test("before_provider_request: injects reasoning_content for Anthropic format with tool_use when thinking enabled", () => {
