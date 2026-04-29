@@ -71,6 +71,8 @@ export function buildStablePrompt(systemPrompt, generateFileListing) {
     out.push(line);
   }
 
+  if (!cwd) cwd = process.cwd();
+
   const { block, errors } = buildHintsBlock(cwd);
   const listing = cwd && generateFileListing ? generateFileListing(cwd) : "";
   const listingBlock = listing ? `\n$ du -hxd1\n${listing}\n` : "";
