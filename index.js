@@ -96,13 +96,15 @@ export default function contextPrunePlugin(pi) {
     const isResponsesApi = "input" in p;
     const msgs = isResponsesApi ? p.input : p.messages;
     if (!Array.isArray(msgs)) return p;
+    const model = (p.model || "").toLowerCase();
+    const needsReasoning = model.includes("deepseek") || model.includes("k2.6");
 
     // Some providers / proxies validate that every assistant message with
     // tool calls also carries reasoning_content when thinking/reasoning is
     // enabled.  gsd-2 core may serialise thinking under a wrong key
     // ("think-tag") or drop it entirely (no thinkingSignature) — we patch
-    // the field unconditionally so the validation always passes.
-    {
+    // the field on specific models (deepseek / K2.6) so validation passes.
+    if (needsReasoning) {
       let changed = false;
       const patched = msgs.map(m => {
         if (!m || typeof m !== "object") return m;
