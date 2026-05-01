@@ -179,55 +179,70 @@ test("integration: sends /compact at >66% context usage and retries turn if agen
   assert.equal(calls[0].msg, "/compact");
 });
 
-// ── Input auto-trigger ──
+// ── Turn-end auto-trigger ──
 
-test("integration: input triggers primary summary when tool calls pending", async () => {
+test("integration: turn_end triggers primary summary when tool calls pending", async () => {
   const pi = { on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {} };
   const handlers = {}, notes = [];
   pi.on = (e, cb) => { handlers[e] = cb; };
   contextPrunePlugin(pi);
   handlers.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
 
-  // Simulate a turn with tool calls
-  handlers.turn_end({
-    message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "x" } }] },
-    toolResults: [{ toolCallId: "tc1", content: [{ type: "text", text: "file content" }] }]
-  }, sessionCtx());
-
-  // User sends new message → should trigger primary summary
-  const result = handlers.input({ text: "continue", source: "interactive" }, {
+  const ctx = {
     ui: { notify: (m) => notes.push(m) },
     model: {},
     modelRegistry: { find: () => null }
-  });
-  assert.deepEqual(result, { action: "continue" });
+  };
+
+  // Turn end with tool calls and results → should trigger primary summary
+  handlers.turn_end({
+    message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: { path: "x" } }] },
+    toolResults: [{ toolCallId: "tc1", content: [{ type: "text", text: "file content" }] }]
+  }, ctx);
+
   await new Promise(r => setTimeout(r, 50));
   assert.ok(notes.some(n => n.includes("初级精简") || n.includes("正在进行")));
 });
 
-test("integration: input does not trigger when no pending tool calls", () => {
-  const events = makePlugin();
-  events.session_start({}, sessionCtx());
-  const notes = [];
-  const result = events.input({ text: "hello", source: "interactive" }, {
+test("integration: turn_end skips summary when already summarizing", async () => {
+  const pi = { on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {} };
+  const handlers = {}, notes = [];
+  pi.on = (e, cb) => { handlers[e] = cb; };
+  contextPrunePlugin(pi);
+  handlers.session_start({}, { ui: { notify: () => {} }, sessionManager: { getBranch: () => [] } });
+
+  const ctx = {
     ui: { notify: (m) => notes.push(m) },
-    model: {}
-  });
-  assert.deepEqual(result, { action: "continue" });
-  assert.equal(notes.length, 0);
+    model: {},
+    modelRegistry: { find: () => null }
+  };
+
+  // First turn end with tool calls → starts summarizing (sets summarizing=true)
+  handlers.turn_end({
+    message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }] },
+    toolResults: [{ toolCallId: "tc1", content: "result" }]
+  }, ctx);
+  assert.ok(notes.some(n => n.includes("正在进行")));
+
+  // Second turn end while summarizing still in flight → should skip, not queue
+  const skipBefore = notes.length;
+  handlers.turn_end({
+    message: { content: [{ type: "toolCall", id: "tc2", name: "search", arguments: {} }] },
+    toolResults: [{ toolCallId: "tc2", content: "hits" }]
+  }, ctx);
+  assert.ok(notes.slice(skipBefore).some(n => n.includes("跳过")));
 });
 
-test("integration: input with source=extension also triggers", () => {
+test("integration: turn_end does not trigger summary when no pending tool calls", () => {
   const events = makePlugin();
   events.session_start({}, sessionCtx());
-  events.turn_end({
-    message: { content: [{ type: "toolCall", id: "ext1", name: "search", arguments: {} }] },
-    toolResults: [{ toolCallId: "ext1", content: "hits" }]
-  }, sessionCtx());
   const notes = [];
-  events.input({ text: "from extension", source: "extension" }, {
+  events.turn_end({
+    message: { content: [{ type: "text", text: "done" }] },
+    toolResults: []
+  }, {
     ui: { notify: (m) => notes.push(m) },
     model: {}
   });
-  assert.ok(notes.some(n => n.includes("初级精简") || n.includes("正在进行")));
+  assert.equal(notes.length, 0);
 });

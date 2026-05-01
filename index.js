@@ -54,9 +54,18 @@ export default function contextPrunePlugin(pi) {
     return { messages: projected };
   });
 
-  // ── Turn end: collect tool calls; trigger /compact at high context usage ──
+  // ── Turn end: collect tool calls; trigger primary summary; trigger /compact at high context usage ──
   pi.on("turn_end", (event, ctx) => {
     sz.collectToolCall(event);
+
+    // Every turn end is an opportunity to compress previous tool output.
+    // If background summarization is already in progress, skip this turn
+    // instead of queueing — the skipped tool calls will be picked up on
+    // the next turn end that fires after the current summary finishes.
+    if (sz.hasPendingToolCalls()) {
+      sz.triggerPrimarySummary(ctx, pi, [...sz.getPendingToolCalls()]);
+    }
+
     const u = ctx?.getContextUsage?.();
     if (!u?.contextWindow || u.percent === null || event.message?.stopReason === "aborted" || event.message?.stopReason === "error") return;
 
@@ -71,16 +80,6 @@ export default function contextPrunePlugin(pi) {
         setTimeout(() => pi.retryLastTurn(), 0);
       }
     }
-  });
-
-  // ── User input: auto-trigger primary summary for pending tool calls ──
-  // Every new turn (not steer, not follow-up) is an opportunity to compress
-  // previous tool output before the agent processes the new request.
-  pi.on("input", (event, ctx) => {
-    if (sz.hasPendingToolCalls() && !sz.isSummarizing()) {
-      sz.triggerPrimarySummary(ctx, pi, [...sz.getPendingToolCalls()]);
-    }
-    return { action: "continue" };
   });
 
 
