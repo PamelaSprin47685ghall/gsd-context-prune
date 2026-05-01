@@ -4,9 +4,6 @@ export function createSummarizer() {
     pendingToolCalls: [],
     summarizing: false,
     summarizerModelId: "default",
-    summaryQueue: Promise.resolve(),
-    queuedGlobalSignature: null,
-    lastGlobalSignature: null,
   };
 
   function setSummarizerModelId(id) { state.summarizerModelId = id; }
@@ -28,11 +25,7 @@ export function createSummarizer() {
     state.pendingToolCalls.length = 0;
     state.summarizing = false;
     state.summarizerModelId = "default";
-    state.summaryQueue = Promise.resolve();
-    state.queuedGlobalSignature = null;
-    state.lastGlobalSignature = null;
   }
-
   // Stable message identifier for global summary collapse tracking.
   // Messages don't have an id field — derive one from existing stable fields.
   function msgId(m) {
@@ -56,14 +49,9 @@ export function createSummarizer() {
     if (latestGlobal) {
       state.summaries = state.summaries.filter(s => s.type !== "global");
       state.summaries.push(latestGlobal);
-      const globalIds = [...latestGlobal.collapsedIds];
-      state.lastGlobalSignature = globalIds.length > 0 ? `${globalIds.length}:${globalIds[globalIds.length - 1]}` : null;
-    } else {
-      state.lastGlobalSignature = null;
     }
-    state.queuedGlobalSignature = null;
-    state.summaryQueue = Promise.resolve();
   }
+
 
   function projectMessages(messages) {
     let result = messages;
@@ -155,72 +143,6 @@ export function createSummarizer() {
     } finally { state.summarizing = false; }
   }
 
-  function contentText(content) {
-    if (typeof content === "string") return content;
-    if (!Array.isArray(content)) return "";
-    return content.map(b => {
-      if (typeof b.text === "string") return b.text;
-      if (b.type) return `[${b.type}]`;
-      return "";
-    }).join("\n");
-  }
-
-  function flattenMessages(messages) {
-    return messages.map(m => `[${m.role}] ${contentText(m.content)}`).join("\n\n");
-  }
-
-  async function triggerGlobalSummary(ctx, pi, projectedMessages) {
-    const collapsedIds = projectedMessages.map(m => msgId(m));
-    if (collapsedIds.length === 0) return;
-
-    const signature = `${collapsedIds.length}:${collapsedIds[collapsedIds.length - 1]}`;
-    if (signature === state.lastGlobalSignature || signature === state.queuedGlobalSignature) return;
-
-    state.queuedGlobalSignature = signature;
-
-    state.summaryQueue = state.summaryQueue.catch(() => {}).then(async () => {
-      if (!tryStartSummarizing()) {
-        ctx?.ui?.notify("pruner: 上一轮精简仍在进行中，跳过本次全局精简。", "info");
-        return;
-      }
-      ctx?.ui?.notify("pruner: 正在进行高级精简 (全局世界线坍缩)...", "info");
-      try {
-        const model = state.summarizerModelId === "default" ? ctx.model
-          : ctx.modelRegistry?.find(...state.summarizerModelId.split("/")) || ctx.model;
-        let mod;
-        try {
-          mod = await import("@gsd/pi-ai");
-        } catch (err) {
-          ctx?.ui?.notify(`pruner: 无法加载 @gsd/pi-ai 模块 - ${err.message}`, "error");
-          return;
-        }
-        const apiKey = await ctx.modelRegistry?.getApiKey(model);
-        const text = flattenMessages(projectedMessages);
-        const prompt = "请将以下所有的对话与执行历史，浓缩总结为\"问题背景\"和\"当前进度\"。\n" +
-          "保留当前正在执行的任务目标、已确认的约束和接下来需要做的事情。\n" +
-          "丢弃琐碎的尝试过程。\n\n<history>\n" + text + "\n</history>";
-        const res = await mod.complete(model, {
-          messages: [{ role: "user", content: [{ type: "text", text: prompt }] }]
-        }, { apiKey, headers: model.headers });
-        const summaryText = res.content.map(c => c.text).join("\n");
-        const collapsedIdSet = new Set(collapsedIds);
-        const timestamp = Date.now();
-        state.summaries = state.summaries.filter(s => s.type !== "global");
-        state.summaries.push({ type: "global", collapsedIds: collapsedIdSet, text: summaryText, timestamp });
-        pi.appendEntry("context-prune-global-data", { collapsedIds, text: summaryText, timestamp });
-        state.lastGlobalSignature = signature;
-        ctx?.ui?.notify("pruner: 高级精简完成，历史已被折叠。", "success");
-      } catch (err) {
-        ctx?.ui?.notify(`pruner: 高级精简失败 - ${err.message}`, "error");
-      } finally {
-        state.summarizing = false;
-        if (state.queuedGlobalSignature === signature) state.queuedGlobalSignature = null;
-      }
-    });
-
-    return state.summaryQueue;
-  }
-
   function collectToolCall(event) {
     const content = Array.isArray(event.message?.content) ? event.message.content : [];
     const toolCalls = content.filter(b => b.type === "toolCall");
@@ -251,7 +173,7 @@ export function createSummarizer() {
     setSummarizerModelId, getSummarizerModelId, isSummarizing,
     hasPendingToolCalls, getPendingToolCalls, resetPendingToolCalls,
     getSummaries, resetState, restoreSummariesFromBranch,
-    projectMessages, triggerPrimarySummary, triggerGlobalSummary,
+    projectMessages, triggerPrimarySummary,
     collectToolCall,
   };
 }

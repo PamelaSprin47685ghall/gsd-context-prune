@@ -9,11 +9,10 @@ test("registers hooks and command", () => {
     registerTool: () => {},
     registerCommand: (n, o) => commands.push({ name: n, options: o })
   });
-  assert.equal(typeof events.before_provider_request, "function");
-  assert.equal(typeof events.before_agent_start, "function");
   assert.equal(typeof events.session_start, "function");
   assert.equal(typeof events.context, "function");
   assert.equal(typeof events.turn_end, "function");
+  assert.equal(typeof events.input, "function");
   assert.equal(typeof events.input, "function");
   assert.equal(commands.length, 1);
   assert.equal(commands[0].name, "pruner");

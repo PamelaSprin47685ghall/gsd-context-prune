@@ -180,12 +180,3 @@ test("restoreSummariesFromBranch: keeps only latest global summary", () => {
   assert.equal(globals[0].text, "new");
 });
 
-test("triggerGlobalSummary: no-op when projected messages empty", async () => {
-  const { sz } = makeSummarizer();
-  await sz.triggerGlobalSummary(
-    { ui: { notify: () => {} }, model: {} },
-    { appendEntry: () => {} },
-    []
-  );
-  assert.equal(sz.getSummaries().length, 0);
-});

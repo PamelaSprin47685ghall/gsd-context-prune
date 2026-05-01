@@ -111,25 +111,52 @@ test("integration: migrates reasoning_content to thinking block", () => {
   assert.equal(result.messages[0].reasoning_content, undefined);
 });
 
-test("integration: no global summary on error stop", () => {
-  const events = {}, notes = [];
-  contextPrunePlugin({
-    on: (e, cb) => { events[e] = cb; },
-    registerTool: () => {}, registerCommand: () => {},
-    appendEntry: () => {}
-  });
+test("integration: no compact on error stop", () => {
+  const calls = [];
+  const pi = {
+    on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {},
+    sendUserMessage: (msg) => calls.push(msg)
+  };
+  const events = {};
+  pi.on = (e, cb) => { events[e] = cb; };
+  contextPrunePlugin(pi);
   events.session_start({}, sessionCtx());
   events.context({ messages: [{ role: "user", content: "hi" }] });
   events.turn_end({ message: { stopReason: "error" } }, {
     getContextUsage: () => ({ tokens: 250, contextWindow: 300, percent: 83.33 }),
-    ui: { notify: m => notes.push(m) }
+    ui: { notify: () => {} }
   });
-  assert.ok(!notes.some(n => n.includes("高级精简")));
+  assert.equal(calls.length, 0);
 });
 
-test("integration: triggers global summary at >66% context usage", async () => {
-  const pi = { on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {} };
-  const handlers = {}, notes = [];
+test("integration: turn_end without tool calls sends /compact but no retryLastTurn", () => {
+  const calls = [];
+  const pi = {
+    on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {},
+    sendUserMessage: (msg) => calls.push({ type: "sendUserMessage", msg }),
+    retryLastTurn: () => calls.push({ type: "retryLastTurn" })
+  };
+  const events = {};
+  pi.on = (e, cb) => { events[e] = cb; };
+  contextPrunePlugin(pi);
+  events.session_start({}, sessionCtx());
+  events.context({ messages: [{ role: "user", content: "hi" }] });
+  events.turn_end({ message: { content: [{ type: "text", text: "done" }], stopReason: "stop" } }, {
+    getContextUsage: () => ({ tokens: 250, contextWindow: 300, percent: 83.33 }),
+    ui: { notify: () => {} }
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, "sendUserMessage");
+  assert.equal(calls[0].msg, "/compact");
+});
+test("integration: sends /compact at >66% context usage and retries turn if agent continues", async () => {
+  const calls = [];
+  const pi = {
+    on: () => {}, registerTool: () => {}, registerCommand: () => {}, appendEntry: () => {},
+    sendUserMessage: (msg) => calls.push({ type: "sendUserMessage", msg }),
+    retryLastTurn: () => calls.push({ type: "retryLastTurn" })
+  };
+  const handlers = {};
   pi.on = (e, cb) => { handlers[e] = cb; };
   contextPrunePlugin(pi);
   handlers.session_start({}, {
@@ -139,17 +166,17 @@ test("integration: triggers global summary at >66% context usage", async () => {
   handlers.context({ messages: [{ role: "user", content: "hi", timestamp: 1000 }, { role: "assistant", content: "ok", timestamp: 1001 }] });
   const ctx = {
     getContextUsage: () => ({ tokens: 262144, contextWindow: 300000, percent: 87.38 }),
-    modelRegistry: { find: () => null },
-    model: "fake",
-    ui: { notify: (m, t) => notes.push({ m, t }) }
+    modelRegistry: { find: () => null }, model: "fake",
+    ui: { notify: () => {} }
   };
   handlers.turn_end({
     message: { content: [{ type: "toolCall", id: "tc1", name: "read", arguments: {} }], stopReason: "stop" },
     toolResults: [{ toolCallId: "tc1", content: "result" }]
   }, ctx);
-  // Wait for async summary queue
-  await new Promise(r => setTimeout(r, 100));
-  assert.ok(notes.some(n => n.m.includes("高级精简")) || notes.some(n => n.m.includes("正在")))
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].type, "sendUserMessage");
+  assert.equal(calls[0].msg, "/compact");
 });
 
 // ── Input auto-trigger ──

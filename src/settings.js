@@ -2,7 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { readFile } from "./fs.js";
+
+function readFile(p) {
+  try {
+    return fs.readFileSync(p, "utf-8").trim();
+  } catch (err) {
+    if (err.code === "ENOENT") return "";
+    throw err;
+  }
+}
 
 const SETTINGS_PATH = path.join(os.homedir(), ".gsd", "context-prune.json");
 

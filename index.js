@@ -1,29 +1,9 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { buildStablePrompt, buildHintsBlock, loadHintSources } from "./src/inject.js";
-import { generateFileListing } from "./src/fs.js";
 import { loadDefaultModelId, saveModelId } from "./src/settings.js";
 import { createSummarizer } from "./src/summary.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// ─── Self-inject into subagent environment ───
-// Ensures subagents spawned via the 'subagent' tool also load this plugin.
-// The subagent tool in gsd-2 inherits process.env and uses GSD_BUNDLED_EXTENSION_PATHS
-// to build the --extension arguments for the child process.
-const bundled = process.env.GSD_BUNDLED_EXTENSION_PATHS || "";
-if (!bundled.includes(__dirname)) {
-  process.env.GSD_BUNDLED_EXTENSION_PATHS = bundled
-    ? `${bundled}${path.delimiter}${__dirname}`
-    : __dirname;
-}
-
-export { generateFileListing, createSummarizer, loadHintSources, buildHintsBlock };
 
 export default function contextPrunePlugin(pi) {
   const sz = createSummarizer();
   sz.setSummarizerModelId(loadDefaultModelId());
-  let lastProjectedMessages = [];
 
   const handleSessionChange = (eventType, ctx) => {
     sz.restoreSummariesFromBranch(ctx?.sessionManager?.getBranch?.());
@@ -46,15 +26,6 @@ export default function contextPrunePlugin(pi) {
   for (const event of sessionEvents) {
     pi.on(event, (_event, ctx) => handleSessionChange(event, ctx));
   }
-
-  // ── System prompt: inject HINTS block ──
-  pi.on("before_agent_start", (event, ctx) => {
-    const { systemPrompt, errors } = buildStablePrompt(event.systemPrompt, generateFileListing);
-    if (errors.length > 0 && ctx?.ui)
-      ctx.ui.notify(`pruner: HINTS 加载警告 — ${errors.join("; ")}`, "warning");
-    if (systemPrompt !== event.systemPrompt)
-      return { systemPrompt };
-  });
 
   // ── Context: project cached summaries into message stream ──
   pi.on("context", (event) => {
@@ -80,17 +51,26 @@ export default function contextPrunePlugin(pi) {
       : migrated;
 
     const projected = sz.projectMessages(fixed);
-    lastProjectedMessages = projected;
     return { messages: projected };
   });
 
-  // ── Turn end: collect tool calls for future summarization ──
+  // ── Turn end: collect tool calls; trigger /compact at high context usage ──
   pi.on("turn_end", (event, ctx) => {
     sz.collectToolCall(event);
     const u = ctx?.getContextUsage?.();
     if (!u?.contextWindow || u.percent === null || event.message?.stopReason === "aborted" || event.message?.stopReason === "error") return;
-    if (u.percent > 66.66 && !sz.isSummarizing())
-      sz.triggerGlobalSummary(ctx, pi, lastProjectedMessages);
+
+    if (u.percent > 66.66) {
+      pi.sendUserMessage("/compact");
+
+      // If this turn_end is NOT also agent_end (message has tool calls or
+      // pauseTurn), keep the agent going after /compact finishes.
+      const willContinue = event.message?.content?.some(c => c.type === "toolCall")
+        || event.message?.stopReason === "pauseTurn";
+      if (willContinue) {
+        setTimeout(() => pi.retryLastTurn(), 0);
+      }
+    }
   });
 
   // ── User input: auto-trigger primary summary for pending tool calls ──
@@ -103,50 +83,6 @@ export default function contextPrunePlugin(pi) {
     return { action: "continue" };
   });
 
-  // ── Provider request: ensure reasoning_content on tool-call messages ──
-  pi.on("before_provider_request", (e) => {
-    const p = e.payload;
-    if (!p) return p;
-
-    const isResponsesApi = "input" in p;
-    const msgs = isResponsesApi ? p.input : p.messages;
-    if (!Array.isArray(msgs)) return p;
-    const model = (p.model || "").toLowerCase();
-    const needsReasoning = model.includes("deepseek") || model.includes("k2.6");
-
-    // Some providers / proxies validate that every assistant message with
-    // tool calls also carries reasoning_content when thinking/reasoning is
-    // enabled.  gsd-2 core may serialise thinking under a wrong key
-    // ("think-tag") or drop it entirely (no thinkingSignature) — we patch
-    // the field on specific models (deepseek / K2.6) so validation passes.
-    if (needsReasoning) {
-      let changed = false;
-      const patched = msgs.map(m => {
-        if (!m || typeof m !== "object") return m;
-        if ("reasoning_content" in m) return m;
-        if (m.role === "user") return m;
-
-        let reasoning = "";
-        if (Array.isArray(m.content)) {
-          const texts = m.content
-            .filter(b => b?.type === "thinking")
-            .map(b => b.thinking || "")
-            .filter(Boolean);
-          if (texts.length > 0) reasoning = texts.join("\n");
-        }
-
-        changed = true;
-        return { ...m, reasoning_content: reasoning };
-      });
-      if (changed) {
-        if (isResponsesApi) p.input = patched;
-        else p.messages = patched;
-      }
-    }
-
-    if (isResponsesApi) delete p.prompt_cache_key;
-    return p;
-  });
 
   // ── Slash command: switch summarizer model ──
   pi.registerCommand("pruner", {
@@ -167,3 +103,5 @@ export default function contextPrunePlugin(pi) {
     }
   });
 }
+
+export { createSummarizer };
